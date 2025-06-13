@@ -1,0 +1,16 @@
+2D Space Optimizer using RL
+
+Problems:
+1. Different kinds of closed shapes
+	a. Size
+	b. Color
+	c. Orientation (options of 10* increments)
+	d. Placement
+2. Different kinds of closed containers
+3. Predefined list of available shapes
+
+
+Approach:
+1. Strategic early placement of larger shapes
+2. Should know the full list of shapes
+3. Edge detection for straight edges
