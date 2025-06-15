@@ -59,9 +59,9 @@ class Container:
         self.color = color
         self.shapes = []
 
-    def draw(self, canvas):
+    def draw_rectangle(self, canvas):
         return canvas.create_rectangle(self.x, self.y, self.x + self.width, self.y + self.height, outline=self.color)
-
+    
     def add_shape(self, shape):
         if self.contains(shape):
             self.shapes.append(shape)
@@ -70,4 +70,4 @@ class Container:
 
     def contains(self, shape):
         left, top, right, bottom = shape.bounding_box()
-        return left >= self.x and right <= self.x + self.width and top >= self.y and bottom <= self.y + self.height
+        return left >= self.x and right <= self.x + self.width and top >= self.y and bottom <= self.y + self.heights
