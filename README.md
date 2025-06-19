@@ -73,5 +73,27 @@ from models.a2c import create_a2c_agent, a2c_update
 - **Visualization:** Use `visualization.py` to debug and visualize agent behavior.
 - **Batch Size & Learning Rate:** Tune these hyperparameters for better convergence.
 
+## Implemented Optimizations
+- **Action Masking:** The agent is prevented from selecting already-filled grid cells, improving learning efficiency and stability.
+- **Reward Normalization:** Rewards are normalized using a running mean and standard deviation, helping stabilize training and improve convergence.
+
+## Creative Optimization Ideas (Future Work)
+- **Curriculum Learning:** Start with smaller/easier grids and gradually increase difficulty as the agent improves.
+- **Shape Prioritization:** Place larger or more awkward shapes first to maximize space utilization.
+- **Learning Rate Scheduling:** Dynamically adjust the learning rate during training for better convergence.
+- **Dynamic Grid Resolution:** Begin with a coarse grid and refine as the agent learns, or use multi-scale approaches.
+- **Hybrid RL + Heuristics:** Combine RL with classic packing heuristics (e.g., bottom-left, best-fit) for improved performance.
+- **Edge/Corner Biasing:** Encourage the agent to fill edges and corners first, reducing isolated empty spaces.
+- **Action Space Extensions:** Allow for shape rotation, flipping, or variable shape types and sizes.
+- **Penalize Isolated Cells:** Add penalties for leaving single empty cells surrounded by filled cells.
+- **Dueling/Double DQN:** Use advanced DQN variants for more robust value estimation.
+- **Prioritized Experience Replay:** Sample important experiences more frequently during training.
+- **Convolutional Networks:** Use CNNs to better process grid-based state representations.
+- **Visual Attention Mechanisms:** Focus the agent's learning on the most relevant parts of the grid.
+- **Self-Play/Adversarial Training:** Use competing agents or adversarial environments to improve robustness.
+- **Transfer Learning:** Pretrain on similar tasks or use pretrained models to accelerate learning.
+
+Feel free to experiment with or contribute any of these ideas to further improve the project!
+
 ## License
 MIT License. See `LICENSE` for details.

@@ -167,22 +167,29 @@ optimizer = optim.Adam(policy_net.parameters(), lr=LEARNING_RATE)
 replay = ReplayBuffer()
 
 step_count = 0
+reward_history = []
 
 for episode in range(NUM_EPISODES):
     state, _ = env.reset()
     done = False
+    episode_reward = 0
 
     while not done:
-        # ε‑greedy action selection.
+        # ε‑greedy action selection with action masking.
         eps_threshold = EPS_END + (EPS_START - EPS_END) * math.exp(-step_count / EPS_DECAY)
+        valid_actions = [i for i in range(env.action_space.n) if state.flatten()[i] == 0]
         if random.random() < eps_threshold:
-            action = env.action_space.sample()
+            action = random.choice(valid_actions)
         else:
             with torch.no_grad():
-                qvals = policy_net(torch.tensor(state, dtype=torch.float32, device=dev).unsqueeze(0))
-                action = int(qvals.argmax().item())
+                qvals = policy_net(torch.tensor(state, dtype=torch.float32, device=dev).unsqueeze(0)).squeeze(0)
+                qvals = qvals.cpu().numpy()
+                masked_qvals = np.full_like(qvals, -np.inf)
+                masked_qvals[valid_actions] = qvals[valid_actions]
+                action = int(np.argmax(masked_qvals))
 
         next_state, reward, done, _, _ = env.step(action)
+        episode_reward += reward
         replay.push(state, action, reward, next_state, done)
         state = next_state
         step_count += 1
@@ -190,6 +197,13 @@ for episode in range(NUM_EPISODES):
         # Learn after enough samples.
         if len(replay) >= BATCH_SIZE:
             s_batch, a_batch, r_batch, sp_batch, d_batch = replay.sample(BATCH_SIZE)
+            # Reward normalization
+            reward_history.append(r_batch.mean().item())
+            if len(reward_history) > 100:
+                reward_history = reward_history[-100:]
+            mean_r = np.mean(reward_history)
+            std_r = np.std(reward_history) + 1e-8
+            r_batch = (r_batch - mean_r) / std_r
             q_pred = policy_net(s_batch).gather(1, a_batch.unsqueeze(1)).squeeze(1)
             with torch.no_grad():
                 q_next = target_net(sp_batch).max(1)[0]
