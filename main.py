@@ -11,6 +11,13 @@ import gym
 from gym import spaces
 
 from constraints import Shape, Container
+from rl_models.dqn import create_dqn_agent, dqn_agent_step
+from rl_models.ppo import create_ppo_agent, ppo_update
+from rl_models.a2c import create_a2c_agent, a2c_update
+# Reference RL models available in rl_models/:
+# - create_dqn_agent, dqn_agent_step
+# - create_ppo_agent, ppo_update
+# - create_a2c_agent, a2c_update
 
 def _patched_contains(self, shape: Shape) -> bool:
     left, top, right, bottom = shape.bounding_box()
