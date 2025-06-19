@@ -1,1 +1,77 @@
 # space_RL
+
+A 2D space optimization and packing environment using Reinforcement Learning (RL).
+
+## Overview
+This project simulates a container-packing problem, where the goal is to optimally place shapes inside a container using RL agents. The environment is built with OpenAI Gym and PyTorch, and supports multiple RL algorithms.
+
+## Features
+- Custom 2D container-packing environment (`ContainerEnv`)
+- Discrete action space: select grid cells for shape placement
+- Reward structure: +1 for valid placement, -1 for invalid
+- Modular RL agent support (DQN, PPO, A2C)
+- Visualization utilities (see `visualization.py`)
+
+## Directory Structure
+- `main.py` — Main training loop and environment definition
+- `constraints.py` — Shape and container logic
+- `models/` — Reference RL agent implementations (DQN, PPO, A2C)
+- `visualization.py` — Visualization utilities (optional)
+- `requirements.txt` — Python dependencies
+
+## Installation
+1. **Clone the repository:**
+   ```bash
+   git clone <repo-url>
+   cd space_RL
+   ```
+2. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+   Additional dependencies (if not in requirements.txt):
+   - torch
+   - gym
+   - numpy
+   - pygame (for visualization)
+
+## How to Run
+By default, `main.py` runs a DQN agent on the container-packing environment:
+```bash
+python main.py
+```
+
+- The script will train the agent and periodically print progress.
+- After training, the model is saved as `dqn_container.pt`.
+- You can modify `main.py` to use other agents from `models/` (see below).
+
+## Using Other RL Models
+Reference RL agents are provided in the `models/` directory:
+- `dqn.py` — Deep Q-Network (DQN)
+- `ppo.py` — Proximal Policy Optimization (PPO)
+- `a2c.py` — Advantage Actor-Critic (A2C)
+
+To use a different agent, import and instantiate it in `main.py`:
+```python
+from models.dqn import create_dqn_agent, dqn_agent_step
+from models.ppo import create_ppo_agent, ppo_update
+from models.a2c import create_a2c_agent, a2c_update
+```
+
+## How It Works
+- The environment is a 10x10 grid container.
+- Each action selects a cell to place a shape (square by default).
+- The agent receives +1 for valid placements, -1 for invalid.
+- The episode ends when the grid is full or after a set number of steps.
+- The RL agent learns to maximize the number of valid placements.
+
+## Optimizations & Tips
+- **Model Architecture:** Try deeper or wider networks for more complex packing strategies.
+- **Reward Shaping:** Experiment with different reward structures (e.g., bonus for filling rows/columns).
+- **Action Space:** Extend to continuous placement or allow for different shape types.
+- **Curriculum Learning:** Start with smaller grids and increase difficulty.
+- **Visualization:** Use `visualization.py` to debug and visualize agent behavior.
+- **Batch Size & Learning Rate:** Tune these hyperparameters for better convergence.
+
+## License
+MIT License. See `LICENSE` for details.
