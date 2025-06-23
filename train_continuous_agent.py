@@ -1,10 +1,14 @@
+"""
+Training Script for Continuous Container Packing Agent
 
+This script trains a PPO agent on the challenging continuous container packing
+environment with multiple shapes, rotation, and realistic physics.
+"""
 
 import os
 import time
 import numpy as np
 import matplotlib.pyplot as plt
-import torch
 from env import ContinuousContainerEnv
 from agent import PPOTrainer
 from shapes import ShapeFactory

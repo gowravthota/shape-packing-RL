@@ -142,9 +142,44 @@ class ContinuousActorCritic(nn.Module):
         rot_action = torch.clamp(rot_action, 0, 360)
         rot_log_prob = rot_dist.log_prob(rot_action)
         
+        # Ensure all tensors have consistent shape for stacking
+        shape_action_tensor = shape_action.float()
+        if shape_action_tensor.dim() == 0:
+            shape_action_tensor = shape_action_tensor.unsqueeze(0)
+        
+        x_tensor = x_action.squeeze()
+        if x_tensor.dim() == 0:
+            x_tensor = x_tensor.unsqueeze(0)
+            
+        y_tensor = y_action.squeeze()
+        if y_tensor.dim() == 0:
+            y_tensor = y_tensor.unsqueeze(0)
+            
+        rot_tensor = rot_action.squeeze()
+        if rot_tensor.dim() == 0:
+            rot_tensor = rot_tensor.unsqueeze(0)
+        
         # Combine actions
-        action = torch.stack([shape_action.float(), x_action.squeeze(), y_action.squeeze(), rot_action.squeeze()], dim=-1)
-        total_log_prob = shape_log_prob + x_log_prob.squeeze() + y_log_prob.squeeze() + rot_log_prob.squeeze()
+        action = torch.stack([shape_action_tensor, x_tensor, y_tensor, rot_tensor], dim=-1)
+        
+        # Ensure log probs have consistent shape
+        shape_log_prob_tensor = shape_log_prob
+        if shape_log_prob_tensor.dim() == 0:
+            shape_log_prob_tensor = shape_log_prob_tensor.unsqueeze(0)
+            
+        x_log_prob_tensor = x_log_prob.squeeze()
+        if x_log_prob_tensor.dim() == 0:
+            x_log_prob_tensor = x_log_prob_tensor.unsqueeze(0)
+            
+        y_log_prob_tensor = y_log_prob.squeeze()
+        if y_log_prob_tensor.dim() == 0:
+            y_log_prob_tensor = y_log_prob_tensor.unsqueeze(0)
+            
+        rot_log_prob_tensor = rot_log_prob.squeeze()
+        if rot_log_prob_tensor.dim() == 0:
+            rot_log_prob_tensor = rot_log_prob_tensor.unsqueeze(0)
+        
+        total_log_prob = shape_log_prob_tensor + x_log_prob_tensor + y_log_prob_tensor + rot_log_prob_tensor
         
         return action, total_log_prob
     
