@@ -1,16 +1,41 @@
-2D Space Optimizer using RL
+2D Space Optimizer using Reinforcement Learning
 
-Problems:
-1. Different kinds of closed shapes
-	a. Size
-	b. Color
-	c. Orientation (options of 10* increments)
-	d. Placement
-2. Different kinds of closed containers
-3. Predefined list of available shapes
+## Project Overview
+This project implements a 2D container packing problem using reinforcement learning.
+The goal is to efficiently place shapes within containers while respecting various constraints.
 
+## Key Components
+1. **Environment (main.py)**: OpenAI Gym environment for the container packing task
+2. **Models (models/)**: 
+   - DQN: Deep Q-Network implementation
+   - PPO: Proximal Policy Optimization
+   - A2C: Advantage Actor-Critic
+3. **Constraints (constraints.py)**: Shape and container definitions with collision detection
+4. **Visualization (visualization.py)**: Rendering with pygame/matplotlib fallbacks
 
-Approach:
-1. Strategic early placement of larger shapes
-2. Should know the full list of shapes
-3. Edge detection for straight edges
+## Problem Definition
+- Different types of shapes: rectangles, circles, triangles, polygons
+- Shape properties: size, color, orientation, placement
+- Container constraints: boundaries, irregular shapes, obstacles
+- Objectives: maximize space utilization, minimize collisions
+
+## Approach
+1. Strategic placement using reinforcement learning
+2. Action masking to prevent invalid placements
+3. Reward shaping for efficient packing
+4. Multiple algorithm implementations for comparison
+
+## Recent Improvements
+- Fixed import paths and dependencies
+- Added error handling and fallbacks
+- Improved device management (CUDA/CPU)
+- Unified model architectures
+- Better visualization options
+- Type hints and documentation
+
+## TODO
+- Implement more sophisticated shape intersection detection
+- Add support for different container shapes
+- Optimize reward function
+- Add hyperparameter configuration
+- Implement model comparison utilities

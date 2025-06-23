@@ -1,7 +1,7 @@
 import math
 import random
 from collections import deque
-from typing import Deque, Tuple
+from typing import Deque, Tuple, Optional
 
 import numpy as np
 import torch
@@ -11,24 +11,23 @@ import gym
 from gym import spaces
 
 from constraints import Shape, Container
-from rl_models.dqn import create_dqn_agent, dqn_agent_step
-from rl_models.ppo import create_ppo_agent, ppo_update
-from rl_models.a2c import create_a2c_agent, a2c_update
-# Reference RL models available in rl_models/:
-# - create_dqn_agent, dqn_agent_step
-# - create_ppo_agent, ppo_update
-# - create_a2c_agent, a2c_update
+from models.dqn import create_dqn_agent, dqn_agent_step
+from models.ppo import create_ppo_agent, ppo_update
+from models.a2c import create_a2c_agent, a2c_update
+# RL models available in models/ directory
 
 def _patched_contains(self, shape: Shape) -> bool:
+    """Patch for Container.contains method to fix bounding box logic."""
     left, top, right, bottom = shape.bounding_box()
     return (
-        left >= self.x and right <= self.x + self.width and top >= self.y and bottom <= self.y + self.height
+        left >= self.x and right <= self.x + self.width and 
+        top >= self.y and bottom <= self.y + self.height
     )
 
 Container.contains = _patched_contains
 
 # ────────────────────────────────────────────────────────────────────────────────
-# Gym environment that treats the 2‑D packing task as a discrete placement game.
+# Configuration Constants
 # ────────────────────────────────────────────────────────────────────────────────
 
 GRID_CELLS = 10  # resolution of the placement grid (10×10 → 100 possible positions)
@@ -45,6 +44,10 @@ OBSTACLES = [
     [(60, 60), (70, 60), (65, 70)]
 ]
 
+# ────────────────────────────────────────────────────────────────────────────────
+# Gym Environment
+# ────────────────────────────────────────────────────────────────────────────────
+
 class ContainerEnv(gym.Env):
     """Simplified container‑packing environment with a discrete action space.
 
@@ -56,7 +59,7 @@ class ContainerEnv(gym.Env):
 
     metadata = {"render.modes": []}
 
-    def __init__(self, max_steps: int | None = None, use_irregular=True):
+    def __init__(self, max_steps: Optional[int] = None, use_irregular: bool = True):
         super().__init__()
         self.max_steps = max_steps or GRID_CELLS * GRID_CELLS
         self.action_space = spaces.Discrete(GRID_CELLS * GRID_CELLS)
@@ -66,22 +69,25 @@ class ContainerEnv(gym.Env):
             shape=(GRID_CELLS, GRID_CELLS),
             dtype=np.int8,
         )
-        self._container: Container | None = None
-        self._grid: np.ndarray | None = None
+        self._container: Optional[Container] = None
+        self._grid: Optional[np.ndarray] = None
         self._steps = 0
         self.use_irregular = use_irregular
 
-    # Helper converting a discrete action index → (x, y) pixel coordinates.
     def _idx_to_xy(self, idx: int) -> Tuple[float, float]:
+        """Helper converting a discrete action index → (x, y) pixel coordinates."""
         row, col = divmod(idx, GRID_CELLS)
         x = col * CELL_SIZE + CELL_SIZE / 2.0
         y = row * CELL_SIZE + CELL_SIZE / 2.0
         return x, y
 
-    def reset(self, *, seed: int | None = None, options=None):
+    def reset(self, *, seed: Optional[int] = None, options=None):
         super().reset(seed=seed)
         if self.use_irregular:
-            self._container = Container(0, 0, CONTAINER_W, CONTAINER_H, polygon=IRREGULAR_POLYGON, obstacles=OBSTACLES)
+            self._container = Container(
+                0, 0, CONTAINER_W, CONTAINER_H, 
+                polygon=IRREGULAR_POLYGON, obstacles=OBSTACLES
+            )
         else:
             self._container = Container(0, 0, CONTAINER_W, CONTAINER_H)
         self._grid = np.zeros((GRID_CELLS, GRID_CELLS), dtype=np.int8)
@@ -98,7 +104,7 @@ class ContainerEnv(gym.Env):
         info = {}
 
         if self._grid[row, col] == 1:
-            reward = -1.0
+            reward = -1.0  # Already occupied
         else:
             x, y = self._idx_to_xy(action)
             shape = Shape(x, y, size=CELL_SIZE)
@@ -116,131 +122,110 @@ class ContainerEnv(gym.Env):
 
         return self._grid.copy(), reward, done, False, info
 
+    def get_valid_actions(self) -> list[int]:
+        """Get list of valid (unoccupied) action indices."""
+        if self._grid is None:
+            return list(range(self.action_space.n))
+        return [i for i in range(self.action_space.n) if self._grid.flatten()[i] == 0]
+
 # ────────────────────────────────────────────────────────────────────────────────
-# Deep Q‑Learning implementation (vanilla DQN) — small, from‑scratch PyTorch.
+# Training Configuration and Main Function
 # ────────────────────────────────────────────────────────────────────────────────
 
-dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def train_dqn_agent(episodes: int = 1000, verbose: bool = True):
+    """Train a DQN agent on the container environment."""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if verbose:
+        print(f"Using device: {device}")
+    
+    env = ContainerEnv()
+    state_size = GRID_CELLS * GRID_CELLS
+    action_size = GRID_CELLS * GRID_CELLS
+    
+    agent = create_dqn_agent(state_size, action_size)
+    
+    scores = deque(maxlen=100)
+    
+    for episode in range(episodes):
+        state, _ = env.reset()
+        state = state.flatten()
+        total_reward = 0
+        
+        while True:
+            valid_actions = env.get_valid_actions()
+            if not valid_actions:  # Fallback for no valid actions
+                break
+                
+            # Epsilon-greedy action selection with masking
+            if random.random() < max(0.01, 1.0 - episode / episodes):
+                action = random.choice(valid_actions)
+            else:
+                with torch.no_grad():
+                    q_values = agent['qnetwork_local'](torch.FloatTensor(state))
+                    # Mask invalid actions
+                    masked_q = torch.full_like(q_values, float('-inf'))
+                    masked_q[valid_actions] = q_values[valid_actions]
+                    action = masked_q.argmax().item()
+            
+            next_state, reward, done, _, _ = env.step(action)
+            next_state = next_state.flatten()
+            
+            dqn_agent_step(agent, state, action, reward, next_state, done)
+            
+            state = next_state
+            total_reward += reward
+            
+            if done:
+                break
+        
+        scores.append(total_reward)
+        
+        if verbose and (episode + 1) % 100 == 0:
+            avg_score = np.mean(scores)
+            print(f"Episode {episode + 1:>4}/{episodes} | Average Score: {avg_score:.2f}")
+    
+    return agent
 
-class DQN(nn.Module):
-    def __init__(self):
-        super().__init__()
-        flat = GRID_CELLS * GRID_CELLS
-        self.layers = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(flat, 128),
-            nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, GRID_CELLS * GRID_CELLS),
-        )
-
-    def forward(self, x):  # noqa: D401
-        return self.layers(x)
-
-class ReplayBuffer:
-    def __init__(self, capacity: int = 20_000):
-        self.buffer: Deque[Tuple[np.ndarray, int, float, np.ndarray, bool]] = deque(maxlen=capacity)
-
-    def push(self, s, a, r, s_, done):  # noqa: D401
-        self.buffer.append((s, a, r, s_, done))
-
-    def sample(self, batch_size: int):  # noqa: D401
-        batch = random.sample(self.buffer, batch_size)
-        s, a, r, sp, d = zip(*batch)
-        return (
-            torch.tensor(np.array(s), dtype=torch.float32, device=dev),
-            torch.tensor(a, dtype=torch.int64, device=dev),
-            torch.tensor(r, dtype=torch.float32, device=dev),
-            torch.tensor(np.array(sp), dtype=torch.float32, device=dev),
-            torch.tensor(d, dtype=torch.bool, device=dev),
-        )
-
-    def __len__(self):  # noqa: D401
-        return len(self.buffer)
-
-# Training hyper‑parameters.
-NUM_EPISODES = 5_000
-BATCH_SIZE = 64
-GAMMA = 0.99
-EPS_START = 1.0
-EPS_END = 0.05
-EPS_DECAY = 15_000  # steps
-TARGET_UPDATE = 500  # steps
-LEARNING_RATE = 1e-3
-
-# Environment & networks.
-env = ContainerEnv()
-policy_net = DQN().to(dev)
-target_net = DQN().to(dev)
-target_net.load_state_dict(policy_net.state_dict())
-optimizer = optim.Adam(policy_net.parameters(), lr=LEARNING_RATE)
-replay = ReplayBuffer()
-
-step_count = 0
-reward_history = []
-
-for episode in range(NUM_EPISODES):
-    state, _ = env.reset()
+def main():
+    """Main function to demonstrate the environment and train agents."""
+    print("Space RL Container Packing Environment")
+    print("=" * 50)
+    
+    # Train DQN agent
+    try:
+        trained_agent = train_dqn_agent(episodes=1000)
+        print("DQN training completed successfully!")
+        
+        # Save the trained model
+        torch.save(trained_agent['qnetwork_local'].state_dict(), "dqn_container.pt")
+        print("Model saved to dqn_container.pt")
+        
+    except Exception as e:
+        print(f"Training failed: {e}")
+        return
+    
+    # Quick evaluation
+    env = ContainerEnv()
+    state, _ = env.reset(seed=42)
     done = False
-    episode_reward = 0
+    steps = 0
+    
+    while not done and steps < 100:  # Prevent infinite loops
+        valid_actions = env.get_valid_actions()
+        if not valid_actions:
+            break
+            
+        with torch.no_grad():
+            q_values = trained_agent['qnetwork_local'](torch.FloatTensor(state.flatten()))
+            masked_q = torch.full_like(q_values, float('-inf'))
+            masked_q[valid_actions] = q_values[valid_actions]
+            action = masked_q.argmax().item()
+        
+        state, _, done, _, info = env.step(action)
+        steps += 1
+    
+    filled_cells = info.get('filled_cells', 0)
+    print(f"Evaluation: Filled {filled_cells} of {GRID_CELLS * GRID_CELLS} cells in {steps} steps")
 
-    while not done:
-        # ε‑greedy action selection with action masking.
-        eps_threshold = EPS_END + (EPS_START - EPS_END) * math.exp(-step_count / EPS_DECAY)
-        valid_actions = [i for i in range(env.action_space.n) if state.flatten()[i] == 0]
-        if random.random() < eps_threshold:
-            action = random.choice(valid_actions)
-        else:
-            with torch.no_grad():
-                qvals = policy_net(torch.tensor(state, dtype=torch.float32, device=dev).unsqueeze(0)).squeeze(0)
-                qvals = qvals.cpu().numpy()
-                masked_qvals = np.full_like(qvals, -np.inf)
-                masked_qvals[valid_actions] = qvals[valid_actions]
-                action = int(np.argmax(masked_qvals))
-
-        next_state, reward, done, _, _ = env.step(action)
-        episode_reward += reward
-        replay.push(state, action, reward, next_state, done)
-        state = next_state
-        step_count += 1
-
-        # Learn after enough samples.
-        if len(replay) >= BATCH_SIZE:
-            s_batch, a_batch, r_batch, sp_batch, d_batch = replay.sample(BATCH_SIZE)
-            # Reward normalization
-            reward_history.append(r_batch.mean().item())
-            if len(reward_history) > 100:
-                reward_history = reward_history[-100:]
-            mean_r = np.mean(reward_history)
-            std_r = np.std(reward_history) + 1e-8
-            r_batch = (r_batch - mean_r) / std_r
-            q_pred = policy_net(s_batch).gather(1, a_batch.unsqueeze(1)).squeeze(1)
-            with torch.no_grad():
-                q_next = target_net(sp_batch).max(1)[0]
-                q_target = r_batch + GAMMA * q_next * (~d_batch)
-            loss = nn.functional.mse_loss(q_pred, q_target)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-        # Periodically update target network.
-        if step_count % TARGET_UPDATE == 0:
-            target_net.load_state_dict(policy_net.state_dict())
-
-    if (episode + 1) % 250 == 0:
-        print(f"Episode {episode+1:>4}/{NUM_EPISODES}  |  ε ≈ {eps_threshold:.3f}  |  steps: {step_count}")
-
-print("Training complete! Saving model → dqn_container.pt")
-
-torch.save(policy_net.state_dict(), "dqn_container.pt")
-
-# Optional quick evaluation run.
-state, _ = env.reset(seed=42)
-done = False
-while not done:
-    with torch.no_grad():
-        action = int(policy_net(torch.tensor(state, dtype=torch.float32, device=dev).unsqueeze(0)).argmax().item())
-    state, _, done, _, info = env.step(action)
-
-print(f"Filled {info.get('filled_cells', 0)} of {GRID_CELLS * GRID_CELLS} cells.")
+if __name__ == "__main__":
+    main()
