@@ -36,6 +36,15 @@ CONTAINER_W = 100
 CONTAINER_H = 100
 CELL_SIZE = CONTAINER_W / GRID_CELLS  # square cells → CELL_SIZE×CELL_SIZE pixels
 
+# Example irregular polygon (pentagon) and obstacles (triangles)
+IRREGULAR_POLYGON = [
+    (10, 10), (90, 10), (95, 50), (50, 90), (10, 60)
+]
+OBSTACLES = [
+    [(30, 30), (40, 30), (35, 40)],
+    [(60, 60), (70, 60), (65, 70)]
+]
+
 class ContainerEnv(gym.Env):
     """Simplified container‑packing environment with a discrete action space.
 
@@ -47,10 +56,10 @@ class ContainerEnv(gym.Env):
 
     metadata = {"render.modes": []}
 
-    def __init__(self, max_steps: int | None = None):
+    def __init__(self, max_steps: int | None = None, use_irregular=True):
         super().__init__()
         self.max_steps = max_steps or GRID_CELLS * GRID_CELLS
-        self.action_space = spaces.Discrete(GRID_CELLS * GRID_CELLS)  # choose a single cell
+        self.action_space = spaces.Discrete(GRID_CELLS * GRID_CELLS)
         self.observation_space = spaces.Box(
             low=0,
             high=1,
@@ -60,6 +69,7 @@ class ContainerEnv(gym.Env):
         self._container: Container | None = None
         self._grid: np.ndarray | None = None
         self._steps = 0
+        self.use_irregular = use_irregular
 
     # Helper converting a discrete action index → (x, y) pixel coordinates.
     def _idx_to_xy(self, idx: int) -> Tuple[float, float]:
@@ -68,14 +78,17 @@ class ContainerEnv(gym.Env):
         y = row * CELL_SIZE + CELL_SIZE / 2.0
         return x, y
 
-    def reset(self, *, seed: int | None = None, options=None):  # noqa: D401
+    def reset(self, *, seed: int | None = None, options=None):
         super().reset(seed=seed)
-        self._container = Container(0, 0, CONTAINER_W, CONTAINER_H)
+        if self.use_irregular:
+            self._container = Container(0, 0, CONTAINER_W, CONTAINER_H, polygon=IRREGULAR_POLYGON, obstacles=OBSTACLES)
+        else:
+            self._container = Container(0, 0, CONTAINER_W, CONTAINER_H)
         self._grid = np.zeros((GRID_CELLS, GRID_CELLS), dtype=np.int8)
         self._steps = 0
         return self._grid.copy(), {}
 
-    def step(self, action: int):  # noqa: D401
+    def step(self, action: int):
         assert self._grid is not None and self._container is not None, "Call reset() first!"
         self._steps += 1
         row, col = divmod(action, GRID_CELLS)
@@ -85,19 +98,17 @@ class ContainerEnv(gym.Env):
         info = {}
 
         if self._grid[row, col] == 1:
-            # Cell already occupied → invalid action.
             reward = -1.0
         else:
             x, y = self._idx_to_xy(action)
             shape = Shape(x, y, size=CELL_SIZE)
             if self._container.add_shape(shape):
-                # Successful placement.
                 self._grid[row, col] = 1
                 reward = 1.0
             else:
-                reward = -1.0  # Out of bounds.
+                # Penalize for out-of-bounds or obstacle placement
+                reward = -1.0
 
-        # Termination: grid completely filled OR too many steps.
         filled = int(self._grid.sum())
         if filled == GRID_CELLS * GRID_CELLS or self._steps >= self.max_steps:
             done = True

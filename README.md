@@ -12,6 +12,10 @@ This project simulates a container-packing problem, where the goal is to optimal
 - Modular RL agent support (DQN, PPO, A2C)
 - Visualization utilities (see `visualization.py`)
 
+## New Features
+- **Irregular Containers:** The environment can now use containers with arbitrary polygonal shapes (not just rectangles). This allows for more realistic and challenging packing scenarios.
+- **Obstacle Handling:** You can define obstacles inside the container as polygons. The agent is penalized for attempting to place shapes in these forbidden zones.
+
 ## Directory Structure
 - `main.py` — Main training loop and environment definition
 - `constraints.py` — Shape and container logic
@@ -94,6 +98,15 @@ from models.a2c import create_a2c_agent, a2c_update
 - **Transfer Learning:** Pretrain on similar tasks or use pretrained models to accelerate learning.
 
 Feel free to experiment with or contribute any of these ideas to further improve the project!
+
+## How to Use
+- By default, the environment uses an irregular pentagon container and two triangular obstacles. You can modify the `IRREGULAR_POLYGON` and `OBSTACLES` variables in `main.py` to experiment with different shapes and obstacle layouts.
+- To revert to a regular rectangular container, set `use_irregular=False` when creating the `ContainerEnv`.
+
+### How It Works
+- The `Container` class now accepts a `polygon` argument (list of (x, y) tuples) to define its shape, and an `obstacles` argument (list of polygons).
+- The environment checks if a placement is inside the irregular container and not inside any obstacle before allowing it.
+- Invalid placements (outside the container or inside an obstacle) are penalized.
 
 ## License
 MIT License. See `LICENSE` for details.
