@@ -1,7 +1,7 @@
 import numpy as np
 import random
 from collections import deque
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -36,19 +36,22 @@ class QNetwork(nn.Module):
         return self.network(state)
 
 def dqn_agent_step(agent: Dict[str, Any], state: np.ndarray, action: int, 
-                   reward: float, next_state: np.ndarray, done: bool) -> None:
-    """Execute one step of the DQN agent."""
+                   reward: float, next_state: np.ndarray, done: bool) -> Optional[float]:
+    """Execute one step of the DQN agent and return loss if training occurred."""
     try:
         agent['memory'].append((state, action, reward, next_state, done))
         
         if len(agent['memory']) > agent['batch_size']:
             experiences = random.sample(agent['memory'], agent['batch_size'])
-            dqn_learn(agent, experiences)
+            loss = dqn_learn(agent, experiences)
+            return loss
+        return None
     except Exception as e:
         print(f"Error in DQN agent step: {e}")
+        return None
 
-def dqn_learn(agent: Dict[str, Any], experiences: List[Tuple]) -> None:
-    """Learn from a batch of experiences."""
+def dqn_learn(agent: Dict[str, Any], experiences: List[Tuple]) -> Optional[float]:
+    """Learn from a batch of experiences and return the loss value."""
     try:
         device = next(agent['qnetwork_local'].parameters()).device
         
@@ -69,7 +72,8 @@ def dqn_learn(agent: Dict[str, Any], experiences: List[Tuple]) -> None:
         Q_expected = agent['qnetwork_local'](states).gather(1, actions)
 
         # Compute loss
-        loss = nn.MSELoss()(Q_expected, Q_targets)
+        loss_fn = nn.MSELoss()
+        loss = loss_fn(Q_expected, Q_targets)
         
         # Minimize the loss
         agent['optimizer'].zero_grad()
@@ -80,8 +84,12 @@ def dqn_learn(agent: Dict[str, Any], experiences: List[Tuple]) -> None:
         # Soft update of target parameters
         soft_update(agent['qnetwork_target'], agent['qnetwork_local'], agent['tau'])
         
+        # Return loss value for metrics tracking
+        return loss.item()
+        
     except Exception as e:
         print(f"Error in DQN learning: {e}")
+        return None
 
 def soft_update(target_model: nn.Module, local_model: nn.Module, tau: float) -> None:
     """Soft update model parameters."""
