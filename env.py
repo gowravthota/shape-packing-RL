@@ -9,6 +9,8 @@ from shapely.ops import unary_union
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.collections import PatchCollection
+import os
+import time
 
 from shapes import (
     PackingShape, ShapeFactory, RectangleShape, CircleShape, 
@@ -18,10 +20,11 @@ from shapes import (
 class Container:
     """Represents the container where shapes are packed."""
     
-    def __init__(self, width: float, height: float, shape: str = "rectangle"):
+    def __init__(self, width: float, height: float, shape: str = "rectangle", vertices: Optional[List[Tuple[float, float]]] = None):
         self.width = width
         self.height = height
         self.shape = shape
+        self.vertices = vertices
         self._geometry = self._create_container_geometry()
         self.placed_shapes: List[PackingShape] = []
         self._occupied_union = None
@@ -38,7 +41,13 @@ class Container:
             points = [(center[0] + radius * math.cos(a), 
                       center[1] + radius * math.sin(a)) for a in angles]
             return Polygon(points)
+        elif self.shape == "arbitrary" and self.vertices is not None:
+            # Arbitrary polygon container defined by vertices
+            if len(self.vertices) < 3:
+                raise ValueError("Arbitrary container requires at least 3 vertices")
+            return Polygon(self.vertices)
         else:
+            # Default to rectangle if shape type is unknown
             return box(0, 0, self.width, self.height)
     
     @property
@@ -144,6 +153,7 @@ class ShapeFittingEnv(gym.Env):
                  num_shapes_to_fit: int = 10,
                  difficulty_level: int = 1,
                  container_shape: str = "rectangle",
+                 container_vertices: Optional[List[Tuple[float, float]]] = None,
                  max_steps: int = 50):
         
         super().__init__()
@@ -154,12 +164,17 @@ class ShapeFittingEnv(gym.Env):
         self.num_shapes_to_fit = num_shapes_to_fit
         self.difficulty_level = difficulty_level
         self.max_steps = max_steps
+        self.container_vertices = container_vertices
+        
+        # Create a unique directory for this run's images
+        self.image_save_path = f"metrics/images/run_{int(time.time())}"
+        os.makedirs(self.image_save_path, exist_ok=True)
         
         # Rotation angles in 20-degree intervals
         self.rotation_angles = [i * 20 for i in range(18)]  # 0, 20, 40, ..., 340
         
         # Create container
-        self.container = Container(container_width, container_height, container_shape)
+        self.container = Container(container_width, container_height, container_shape, container_vertices)
         
         # Shape management
         self.shapes_to_fit: List[PackingShape] = []
@@ -187,10 +202,19 @@ class ShapeFittingEnv(gym.Env):
     def _setup_spaces(self):
         """Setup action and observation spaces."""
         
+        # For arbitrary containers, use the bounding box for action space limits
+        if self.container.shape == "arbitrary":
+            minx, miny, maxx, maxy = self.container.geometry.bounds
+            action_x_max = maxx
+            action_y_max = maxy
+        else:
+            action_x_max = self.container_width
+            action_y_max = self.container_height
+        
         # Action space: [shape_id, x, y, rotation_discrete]
         self.action_space = spaces.Box(
             low=np.array([0, 0, 0, 0], dtype=np.float32),
-            high=np.array([self.num_shapes_to_fit-1, self.container_width, self.container_height, 17], dtype=np.float32),
+            high=np.array([self.num_shapes_to_fit-1, action_x_max, action_y_max, 17], dtype=np.float32),
             dtype=np.float32
         )
         
@@ -298,6 +322,9 @@ class ShapeFittingEnv(gym.Env):
             'step': self.current_step,
             'success_rate': self.shapes_fitted_count / self.num_shapes_to_fit
         })
+        
+        # Save a screenshot of the step
+        self._save_step_image()
         
         return self._get_observation(), reward, done, info
     
@@ -475,6 +502,18 @@ class ShapeFittingEnv(gym.Env):
         
         return grid
     
+    def _save_step_image(self):
+        """Save a screenshot of the current environment state."""
+        fig, ax = plt.subplots(figsize=(8, 8))
+        
+        # Use a similar rendering logic as the interactive renderer
+        self._render_matplotlib(ax=ax)
+        
+        # Save the figure
+        filepath = os.path.join(self.image_save_path, f"step_{self.current_step:03d}.png")
+        fig.savefig(filepath)
+        plt.close(fig)  # Close the figure to free up memory
+    
     def _encode_shape_info(self, shape: PackingShape) -> List[float]:
         """Encode shape information for observation."""
         # Shape type encoding (one-hot style)
@@ -507,53 +546,57 @@ class ShapeFittingEnv(gym.Env):
             x, y = 0.0, 0.0
             rotation = 0.0
         
-        return [shape_type, width, height, area, fitted_flag, x, y, rotation]
+        shape_features = [shape_type, width, height, area, fitted_flag, x, y, rotation]
+        return shape_features
     
     def render(self, mode='human'):
-        """Render the environment."""
+        """Render the environment state."""
         if mode == 'human':
-            self._render_matplotlib()
+            fig, ax = plt.subplots(figsize=(8, 8))
+            self._render_matplotlib(ax=ax)
+            if plt.get_fignums():
+                plt.show(block=False)
+                plt.pause(0.1)
     
-    def _render_matplotlib(self):
-        """Render using matplotlib."""
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
-        
-        # Left plot: Container with fitted shapes
-        ax1.set_xlim(0, self.container_width)
-        ax1.set_ylim(0, self.container_height)
-        ax1.set_aspect('equal')
-        ax1.set_title(f'Container - {self.shapes_fitted_count}/{self.num_shapes_to_fit} shapes fitted')
-        
+    def _render_matplotlib(self, ax=None):
+        """Render using Matplotlib, showing container and shapes."""
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8, 8))
+
+        # Determine bounds for rendering
+        minx, miny, maxx, maxy = self.container.geometry.bounds
+        ax.set_xlim(minx - 10, maxx + 10)
+        ax.set_ylim(miny - 10, maxy + 10)
+        ax.set_aspect('equal')
+
         # Draw container boundary
-        container_patch = patches.Rectangle((0, 0), self.container_width, self.container_height,
+        container_patch = patches.Rectangle((minx, miny), maxx - minx, maxy - miny,
                                           linewidth=2, edgecolor='black', facecolor='none')
-        ax1.add_patch(container_patch)
+        ax.add_patch(container_patch)
         
         # Draw fitted shapes
         for shape in self.container.placed_shapes:
-            self._add_shape_patch(ax1, shape, 'green', alpha=0.7)
+            self._add_shape_patch(ax, shape, 'green', alpha=0.7)
         
-        # Right plot: Shapes to fit (remaining)
-        ax2.set_xlim(-50, 150)
-        ax2.set_ylim(-50, 150)
-        ax2.set_aspect('equal')
-        ax2.set_title('Shapes to Fit')
+        ax.set_title(f"Step: {self.current_step}, Fitted: {self.shapes_fitted_count}/{self.num_shapes_to_fit}")
+        ax.set_xlabel("X coordinate")
+        ax.set_ylabel("Y coordinate")
         
-        # Draw unfitted shapes in a grid layout
-        unfitted_shapes = [shape for shape in self.shapes_to_fit if not shape.is_fitted]
-        cols = 3
-        for i, shape in enumerate(unfitted_shapes[:9]):  # Show up to 9 shapes
-            row = i // cols
-            col = i % cols
-            x_offset = col * 40
-            y_offset = row * 40
+        # Display shapes to be fit on the side
+        unfitted_shapes = [s for s in self.shapes_to_fit if not s.is_fitted]
+        if unfitted_shapes:
+            ax.text(maxx + 15, maxy, "Shapes to Fit:", fontsize=12)
+        
+        for i, shape in enumerate(unfitted_shapes):
+            display_shape = self._create_positioned_shape(shape, 0, 0, 0)
+            s_minx, s_miny, s_maxx, s_maxy = display_shape.bounds
             
-            # Create a copy for display
-            display_shape = self._create_positioned_shape(shape, x_offset + 20, y_offset + 20, 0)
-            self._add_shape_patch(ax2, display_shape, 'red', alpha=0.5)
-        
-        plt.tight_layout()
-        plt.show()
+            # Position shape for display outside container
+            display_x = maxx + 15 + (s_maxx - s_minx) / 2
+            display_y = maxy - 10 * (i + 1) * (s_maxy - s_miny) / 2
+            
+            display_shape.move_to((display_x, display_y))
+            self._add_shape_patch(ax, display_shape, color=shape.shape_def.color, alpha=0.5)
     
     def _add_shape_patch(self, ax, shape: PackingShape, color: str, alpha: float = 0.7):
         """Add a shape patch to the matplotlib axes."""
@@ -576,11 +619,8 @@ class ShapeFittingEnv(gym.Env):
         else:
             # For other shapes, use the geometry directly
             coords = list(shape.geometry.exterior.coords)
-            patch = patches.Polygon(
-                coords, closed=True,
-                facecolor=color, alpha=alpha, edgecolor='black'
-            )
-            ax.add_patch(patch)
+            shape_patch = patches.Polygon(coords, edgecolor="black", facecolor=color, alpha=alpha)
+            ax.add_patch(shape_patch)
     
     def get_metrics(self) -> Dict[str, Any]:
         """Get current environment metrics."""
@@ -594,6 +634,48 @@ class ShapeFittingEnv(gym.Env):
             'max_steps': self.max_steps,
             'difficulty_level': self.difficulty_level
         }
+
+    @staticmethod
+    def create_hexagon_container(center_x: float, center_y: float, radius: float) -> List[Tuple[float, float]]:
+        """Create vertices for a hexagonal container."""
+        angles = np.linspace(0, 2*math.pi, 6, endpoint=False)
+        vertices = [(center_x + radius * math.cos(a), center_y + radius * math.sin(a)) for a in angles]
+        return vertices
+    
+    @staticmethod
+    def create_octagon_container(center_x: float, center_y: float, radius: float) -> List[Tuple[float, float]]:
+        """Create vertices for an octagonal container."""
+        angles = np.linspace(0, 2*math.pi, 8, endpoint=False)
+        vertices = [(center_x + radius * math.cos(a), center_y + radius * math.sin(a)) for a in angles]
+        return vertices
+    
+    @staticmethod
+    def create_star_container(center_x: float, center_y: float, outer_radius: float, inner_radius: float, num_points: int = 5) -> List[Tuple[float, float]]:
+        """Create vertices for a star-shaped container."""
+        vertices = []
+        for i in range(num_points * 2):
+            angle = i * math.pi / num_points
+            if i % 2 == 0:  # Outer point
+                radius = outer_radius
+            else:  # Inner point
+                radius = inner_radius
+            x = center_x + radius * math.cos(angle)
+            y = center_y + radius * math.sin(angle)
+            vertices.append((x, y))
+        return vertices
+    
+    @staticmethod
+    def create_l_shaped_container(width: float, height: float, cutout_width: float, cutout_height: float) -> List[Tuple[float, float]]:
+        """Create vertices for an L-shaped container."""
+        vertices = [
+            (0, 0),
+            (width, 0),
+            (width, height - cutout_height),
+            (width - cutout_width, height - cutout_height),
+            (width - cutout_width, height),
+            (0, height)
+        ]
+        return vertices
 
 # Backward compatibility alias
 ContinuousContainerEnv = ShapeFittingEnv 

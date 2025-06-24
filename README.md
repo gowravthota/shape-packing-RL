@@ -15,9 +15,13 @@ This project trains an AI agent to:
 
 ### Environment (`env.py`)
 - **`ShapeFittingEnv`**: Main RL environment
+- **Container Types**: 
+  - `"rectangle"`: Standard rectangular container
+  - `"circle"`: Circular container
+  - `"arbitrary"`: Custom polygon defined by vertices
 - **Action Space**: [shape_id, x_position, y_position, rotation_index]
   - `shape_id`: Which shape from the group to place (discrete: 0 to num_shapes-1)
-  - `x, y`: Position coordinates (continuous: 0 to container_width/height)
+  - `x, y`: Position coordinates (continuous: 0 to container_width/height or container bounds)
   - `rotation_index`: Discrete rotation (0-17, representing 0° to 340° in 20° steps)
 - **Observation Space**: Container state + occupancy grid + shape information
 - **Reward System**:
@@ -63,13 +67,22 @@ pip install -r requirements.txt
 from env import ShapeFittingEnv
 from agent import PPOTrainer
 
-# Create environment
+# Create standard rectangular environment
 env = ShapeFittingEnv(
     container_width=100,
     container_height=100,
     num_shapes_to_fit=10,
     difficulty_level=1,
     max_steps=50
+)
+
+# Or create environment with arbitrary container shape
+custom_vertices = [(10, 10), (90, 10), (90, 50), (50, 80), (10, 50)]
+env_custom = ShapeFittingEnv(
+    container_shape="arbitrary",
+    container_vertices=custom_vertices,
+    num_shapes_to_fit=10,
+    difficulty_level=1
 )
 
 # Create and train agent
@@ -162,13 +175,17 @@ results = run_scenario_evaluation(trainer, scenarios[0])
 
 ## 🔧 Key Features
 
+- **Arbitrary Container Shapes**: Support for custom polygonal containers via vertices
 - **Discrete Rotation**: 18 rotation angles (20° increments) for more stable learning
 - **Shape Fitting Focus**: Reward based on number of shapes fitted, not space utilization
 - **Progressive Difficulty**: Automatic curriculum learning with 5 difficulty levels
 - **Realistic Physics**: Proper collision detection using Shapely geometry
 - **Multiple Shape Types**: Rectangles, circles, triangles, L-shapes, irregular polygons
+- **Container Shape Helpers**: Built-in methods for hexagons, octagons, stars, and L-shapes
 - **Comprehensive Evaluation**: 5 different test scenarios measuring various skills
 - **Functional Code Design**: Clean, modular, and extensible architecture
+
+
 
 ## 📁 Project Structure
 
