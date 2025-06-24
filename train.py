@@ -1,112 +1,123 @@
-
-
 import os
 import time
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-from env import ContinuousContainerEnv
+from env import ShapeFittingEnv
 from agent import PPOTrainer
 from shapes import ShapeFactory
 import pandas as pd
 
-class CurriculumManager:
-    """Manages curriculum learning progression."""
+class ProgressiveTrainingManager:
+    """Manages progressive training difficulty."""
     
-    def __init__(self, start_level: int = 1, max_level: int = 5):
-        self.current_level = start_level
-        self.max_level = max_level
-        self.level_episodes = 0
-        self.level_successes = 0
+    def __init__(self, start_difficulty: int = 1, max_difficulty: int = 5):
+        self.current_difficulty = start_difficulty
+        self.max_difficulty = max_difficulty
+        self.difficulty_episodes = 0
+        self.difficulty_successes = 0
         
-        # Criteria for advancing to next level
-        self.level_requirements = {
-            1: {"episodes": 100, "success_rate": 0.6, "avg_utilization": 0.4},
-            2: {"episodes": 150, "success_rate": 0.5, "avg_utilization": 0.5},
-            3: {"episodes": 200, "success_rate": 0.4, "avg_utilization": 0.6},
-            4: {"episodes": 250, "success_rate": 0.3, "avg_utilization": 0.7},
-            5: {"episodes": 300, "success_rate": 0.2, "avg_utilization": 0.75},
+        # Criteria for advancing to next difficulty level
+        self.advancement_requirements = {
+            1: {"min_episodes": 50, "success_rate": 0.7, "avg_shapes_fitted": 7},
+            2: {"min_episodes": 75, "success_rate": 0.6, "avg_shapes_fitted": 6},
+            3: {"min_episodes": 100, "success_rate": 0.5, "avg_shapes_fitted": 5},
+            4: {"min_episodes": 125, "success_rate": 0.4, "avg_shapes_fitted": 4},
+            5: {"min_episodes": 150, "success_rate": 0.3, "avg_shapes_fitted": 3},
         }
     
-    def should_advance(self, recent_success_rate: float, recent_utilization: float) -> bool:
-        """Check if agent should advance to next curriculum level."""
-        if self.current_level >= self.max_level:
+    def should_advance(self, recent_success_rate: float, recent_avg_fitted: float) -> bool:
+        """Check if agent should advance to next difficulty level."""
+        if self.current_difficulty >= self.max_difficulty:
             return False
         
-        requirements = self.level_requirements[self.current_level]
+        requirements = self.advancement_requirements[self.current_difficulty]
         
-        if (self.level_episodes >= requirements["episodes"] and
+        if (self.difficulty_episodes >= requirements["min_episodes"] and
             recent_success_rate >= requirements["success_rate"] and 
-            recent_utilization >= requirements["avg_utilization"]):
+            recent_avg_fitted >= requirements["avg_shapes_fitted"]):
             return True
         
         return False
     
-    def advance_level(self):
-        """Advance to next curriculum level."""
-        if self.current_level < self.max_level:
-            self.current_level += 1
-            self.level_episodes = 0
-            self.level_successes = 0
-            print(f"\n🎓 CURRICULUM ADVANCED TO LEVEL {self.current_level}!")
-            print(f"   Difficulty increased - more complex shapes and challenges ahead!")
+    def advance_difficulty(self):
+        """Advance to next difficulty level."""
+        if self.current_difficulty < self.max_difficulty:
+            self.current_difficulty += 1
+            self.difficulty_episodes = 0
+            self.difficulty_successes = 0
+            print(f"\n🎓 DIFFICULTY ADVANCED TO LEVEL {self.current_difficulty}!")
+            print(f"   Training now using more complex shapes and arrangements!")
     
     def update_stats(self, success: bool):
-        """Update level statistics."""
-        self.level_episodes += 1
+        """Update difficulty level statistics."""
+        self.difficulty_episodes += 1
         if success:
-            self.level_successes += 1
+            self.difficulty_successes += 1
 
-def create_challenging_scenarios():
-    """Create specific challenging scenarios for testing."""
+def create_evaluation_scenarios():
+    """Create specific evaluation scenarios for testing."""
     scenarios = [
         {
-            "name": "Tetris Challenge",
-            "description": "Complex interlocking shapes requiring precise rotation",
-            "curriculum_level": 3,
-            "container_size": (80, 80),
-            "emphasis": "rotation_critical"
-        },
-        {
-            "name": "Efficiency Master",
-            "description": "Large container with many small pieces - maximize utilization",
-            "curriculum_level": 4,
-            "container_size": (120, 120),
-            "emphasis": "utilization_critical"
-        },
-        {
-            "name": "Tight Fit",
-            "description": "Small container with large shapes - every placement matters",
-            "curriculum_level": 5,
-            "container_size": (60, 60),
-            "emphasis": "precision_critical"
-        },
-        {
-            "name": "Mixed Madness",
-            "description": "Ultimate challenge - mixed shapes, sizes, and rotations",
-            "curriculum_level": 5,
+            "name": "Basic Shapes",
+            "description": "Simple rectangles and circles - test fundamental fitting",
+            "difficulty_level": 1,
+            "num_shapes": 8,
             "container_size": (100, 100),
-            "emphasis": "all_skills"
+            "max_steps": 40
+        },
+        {
+            "name": "Mixed Shapes",
+            "description": "Rectangles, circles, and triangles - test variety handling",
+            "difficulty_level": 2,
+            "num_shapes": 10,
+            "container_size": (100, 100),
+            "max_steps": 50
+        },
+        {
+            "name": "Complex Shapes",
+            "description": "All shape types including L-shapes - test complex fitting",
+            "difficulty_level": 3,
+            "num_shapes": 12,
+            "container_size": (100, 100),
+            "max_steps": 60
+        },
+        {
+            "name": "Expert Challenge",
+            "description": "Maximum complexity with irregular shapes",
+            "difficulty_level": 4,
+            "num_shapes": 15,
+            "container_size": (100, 100),
+            "max_steps": 75
+        },
+        {
+            "name": "Tight Space",
+            "description": "Large shapes in smaller container - ultimate precision test",
+            "difficulty_level": 5,
+            "num_shapes": 10,
+            "container_size": (80, 80),
+            "max_steps": 50
         }
     ]
     return scenarios
 
 def run_scenario_evaluation(trainer, scenario):
-    """Evaluate agent on a specific challenging scenario."""
-    print(f"\n🎯 SCENARIO EVALUATION: {scenario['name']}")
+    """Evaluate agent on a specific scenario."""
+    print(f"\n🎯 SCENARIO: {scenario['name']}")
     print(f"   {scenario['description']}")
     
     # Create environment for this scenario
-    env = ContinuousContainerEnv(
+    env = ShapeFittingEnv(
         container_width=scenario['container_size'][0],
         container_height=scenario['container_size'][1],
-        curriculum_level=scenario['curriculum_level'],
-        max_shapes=25
+        num_shapes_to_fit=scenario['num_shapes'],
+        difficulty_level=scenario['difficulty_level'],
+        max_steps=scenario['max_steps']
     )
     
     results = []
     
-    for episode in range(10):
+    for episode in range(5):  # Test 5 episodes per scenario
         obs = env.reset()
         done = False
         episode_reward = 0
@@ -122,215 +133,217 @@ def run_scenario_evaluation(trainer, scenario):
         metrics = env.get_metrics()
         results.append({
             'episode': episode,
-            'reward': metrics['episode_reward'],
-            'utilization': metrics['utilization'],
-            'shapes_placed': metrics['shapes_placed'],
-            'success': metrics['shapes_remaining'] == 0
+            'reward': episode_reward,
+            'shapes_fitted': metrics['shapes_fitted'],
+            'success_rate': metrics['success_rate'],
+            'utilization': metrics['utilization']
         })
     
     # Analyze results
     df = pd.DataFrame(results)
     
-    print(f"   Results over 10 episodes:")
-    print(f"   • Average Reward: {df['reward'].mean():.2f}")
-    print(f"   • Average Utilization: {df['utilization'].mean():.2%}")
-    print(f"   • Success Rate: {df['success'].mean():.2%}")
-    print(f"   • Average Shapes Placed: {df['shapes_placed'].mean():.1f}")
+    print(f"   Results (5 episodes):")
+    print(f"   • Avg Reward: {df['reward'].mean():.1f}")
+    print(f"   • Avg Shapes Fitted: {df['shapes_fitted'].mean():.1f}/{scenario['num_shapes']}")
+    print(f"   • Success Rate: {df['success_rate'].mean():.2%}")
+    print(f"   • Avg Utilization: {df['utilization'].mean():.2%}")
     
     return df
 
 def main():
-    """Main training loop with curriculum learning and advanced challenges."""
+    """Main training loop with progressive difficulty and comprehensive evaluation."""
     
-    print("🚀 ADVANCED CONTAINER PACKING TRAINING")
-    print("=" * 60)
-    print("Training an agent to pack complex shapes with:")
+    print("🚀 SHAPE FITTING REINFORCEMENT LEARNING TRAINING")
+    print("=" * 65)
+    print("Training an agent to fit groups of shapes in containers with:")
     print("• Multiple shape types (rectangles, circles, triangles, L-shapes, irregular)")
-    print("• Continuous positioning and rotation")
-    print("• Realistic collision detection")
-    print("• Progressive difficulty curriculum")
-    print("• Challenging reward structure")
-    print("=" * 60)
+    print("• Discrete 20-degree rotation intervals")
+    print("• Reward based on number of shapes successfully fitted")
+    print("• Progressive difficulty levels")
+    print("• Realistic collision detection and spatial reasoning")
+    print("=" * 65)
     
     # Create environment
-    print("\n🏗️  Creating advanced environment...")
-    env = ContinuousContainerEnv(
+    print("\n🏗️  Creating shape fitting environment...")
+    env = ShapeFittingEnv(
         container_width=100,
         container_height=100,
-        curriculum_level=1,
-        max_shapes=20
+        num_shapes_to_fit=10,
+        difficulty_level=1,
+        max_steps=50
     )
     
     print(f"   Container: {env.container_width}x{env.container_height}")
+    print(f"   Shapes to fit: {env.num_shapes_to_fit}")
     print(f"   Action space: {env.action_space}")
     print(f"   Observation space: {env.observation_space.shape}")
+    print(f"   Rotation angles: {env.rotation_angles}")
     
     # Create trainer
     print("\n🧠 Creating PPO trainer...")
     trainer = PPOTrainer(
         env=env,
         obs_size=env.observation_space.shape[0],
-        max_shapes=20,
+        num_shapes=env.num_shapes_to_fit,
+        num_rotations=len(env.rotation_angles),
         lr=3e-4,
         clip_ratio=0.2,
         value_coef=0.5,
         entropy_coef=0.01
     )
     
-    print(f"   Device: {trainer.device}")
-    print(f"   Network parameters: {sum(p.numel() for p in trainer.network.parameters()):,}")
-    
-    # Curriculum manager
-    curriculum = CurriculumManager()
+    # Progressive training manager
+    progress_manager = ProgressiveTrainingManager()
     
     # Training parameters
     total_timesteps = 2000000  # 2M timesteps
-    eval_frequency = 20000
+    eval_frequency = 25000
     save_frequency = 100000
+    scenario_eval_frequency = 100000
     
     print(f"\n🎯 Training configuration:")
     print(f"   Total timesteps: {total_timesteps:,}")
     print(f"   Evaluation frequency: {eval_frequency:,}")
     print(f"   Save frequency: {save_frequency:,}")
+    print(f"   Progressive difficulty enabled")
     
     # Training metrics
     training_metrics = {
         'timesteps': [],
-        'curriculum_level': [],
+        'difficulty_level': [],
         'avg_reward': [],
-        'avg_utilization': [],
-        'success_rate': [],
-        'avg_episode_length': []
+        'avg_shapes_fitted': [],
+        'avg_success_rate': [],
+        'policy_loss': [],
+        'value_loss': []
     }
     
-    # Create challenging scenarios
-    scenarios = create_challenging_scenarios()
-    
-    print(f"\n🎮 Created {len(scenarios)} challenging scenarios for evaluation")
-    
-    # Start training
-    print("\n" + "=" * 60)
-    print("🚀 STARTING TRAINING")
-    print("=" * 60)
-    
+    print(f"\n🔥 Starting training...")
     start_time = time.time()
-    timestep = 0
+    timesteps_completed = 0
     
     try:
-        while timestep < total_timesteps:
-            print(f"\n⏰ Timestep {timestep:,} / {total_timesteps:,}")
-            print(f"📚 Curriculum Level: {curriculum.current_level}")
+        while timesteps_completed < total_timesteps:
+            # Update environment difficulty if needed
+            if env.difficulty_level != progress_manager.current_difficulty:
+                env.difficulty_level = progress_manager.current_difficulty
+                env.reset()  # Reset to apply new difficulty
             
-            # Update environment curriculum level
-            env.curriculum_level = curriculum.current_level
-            
-            # Collect trajectories and train
+            # Collect trajectories and update policy
+            print(f"\nStep {timesteps_completed:,}/{total_timesteps:,} (Difficulty {progress_manager.current_difficulty})")
             batch = trainer.collect_trajectories(n_steps=2048)
-            losses = trainer.update_policy(batch)
+            metrics = trainer.update_policy(batch)
             
-            timestep += len(batch['rewards'])
+            timesteps_completed += 2048
             
-            # Update curriculum statistics
-            recent_episodes = trainer.episode_rewards[-20:] if len(trainer.episode_rewards) >= 20 else trainer.episode_rewards
-            recent_success = trainer.success_rates[-20:] if len(trainer.success_rates) >= 20 else trainer.success_rates
-            recent_utilization = trainer.utilization_scores[-20:] if len(trainer.utilization_scores) >= 20 else trainer.utilization_scores
+            # Track training metrics
+            training_metrics['timesteps'].append(timesteps_completed)
+            training_metrics['difficulty_level'].append(progress_manager.current_difficulty)
+            training_metrics['avg_reward'].append(metrics['avg_reward'])
+            training_metrics['avg_shapes_fitted'].append(metrics['avg_shapes_fitted'])
+            training_metrics['avg_success_rate'].append(metrics['avg_success_rate'])
+            training_metrics['policy_loss'].append(metrics['policy_loss'])
+            training_metrics['value_loss'].append(metrics['value_loss'])
             
-            if recent_episodes:
-                avg_reward = np.mean(recent_episodes)
-                success_rate = np.mean(recent_success)
-                avg_utilization = np.mean(recent_utilization)
-                
-                print(f"📊 Recent Performance (last 20 episodes):")
-                print(f"   • Average Reward: {avg_reward:.2f}")
-                print(f"   • Success Rate: {success_rate:.2%}")
-                print(f"   • Average Utilization: {avg_utilization:.2%}")
-                print(f"   • Policy Loss: {losses['policy_loss']:.4f}")
-                print(f"   • Value Loss: {losses['value_loss']:.4f}")
-                
-                # Check curriculum advancement
-                if curriculum.should_advance(success_rate, avg_utilization):
-                    curriculum.advance_level()
-                
-                # Store metrics
-                training_metrics['timesteps'].append(timestep)
-                training_metrics['curriculum_level'].append(curriculum.current_level)
-                training_metrics['avg_reward'].append(avg_reward)
-                training_metrics['avg_utilization'].append(avg_utilization)
-                training_metrics['success_rate'].append(success_rate)
-                training_metrics['avg_episode_length'].append(np.mean(trainer.episode_lengths[-20:]) if len(trainer.episode_lengths) >= 20 else 0)
+            # Print progress
+            print(f"  Avg Reward: {metrics['avg_reward']:.2f}")
+            print(f"  Avg Shapes Fitted: {metrics['avg_shapes_fitted']:.1f}/{env.num_shapes_to_fit}")
+            print(f"  Avg Success Rate: {metrics['avg_success_rate']:.2%}")
+            print(f"  Policy Loss: {metrics['policy_loss']:.4f}")
+            print(f"  Value Loss: {metrics['value_loss']:.4f}")
             
-            # Evaluation
-            if timestep % eval_frequency == 0:
-                print(f"\n🔍 EVALUATION AT TIMESTEP {timestep:,}")
-                trainer.evaluate(n_episodes=10)
+            # Check for difficulty progression
+            if len(trainer.episode_success_rates) >= 20:  # Need sufficient data
+                recent_success_rate = np.mean(list(trainer.episode_success_rates)[-20:])
+                recent_avg_fitted = np.mean(list(trainer.episode_shapes_fitted)[-20:])
                 
-                # Test on challenging scenarios
-                if timestep >= 200000:  # After some training
-                    print("\n🎯 CHALLENGING SCENARIO TESTS:")
-                    for scenario in scenarios:
-                        if curriculum.current_level >= scenario['curriculum_level'] - 1:
-                            scenario_results = run_scenario_evaluation(trainer, scenario)
+                if progress_manager.should_advance(recent_success_rate, recent_avg_fitted):
+                    progress_manager.advance_difficulty()
+            
+            # Regular evaluation
+            if timesteps_completed % eval_frequency == 0:
+                print("\n📊 Running evaluation...")
+                eval_metrics = trainer.evaluate(n_episodes=10)
+                print(f"  Eval Avg Reward: {eval_metrics['avg_reward']:.2f}")
+                print(f"  Eval Avg Shapes Fitted: {eval_metrics['avg_shapes_fitted']:.1f}")
+                print(f"  Eval Success Rate: {eval_metrics['success_rate']:.2%}")
+            
+            # Comprehensive scenario evaluation
+            if timesteps_completed % scenario_eval_frequency == 0:
+                print("\n🧪 Running comprehensive scenario evaluation...")
+                scenarios = create_evaluation_scenarios()
+                scenario_results = {}
+                
+                for scenario in scenarios:
+                    scenario_df = run_scenario_evaluation(trainer, scenario)
+                    scenario_results[scenario['name']] = scenario_df
+                
+                # Save scenario results
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                results_path = f"metrics/scenario_evaluation_{timesteps_completed}_{timestamp}.csv"
+                
+                all_results = []
+                for scenario_name, df in scenario_results.items():
+                    df['scenario'] = scenario_name
+                    df['timestep'] = timesteps_completed
+                    all_results.append(df)
+                
+                combined_df = pd.concat(all_results, ignore_index=True)
+                os.makedirs('metrics', exist_ok=True)
+                combined_df.to_csv(results_path, index=False)
+                print(f"  Scenario results saved to {results_path}")
             
             # Save model
-            if timestep % save_frequency == 0:
-                model_path = f"continuous_ppo_checkpoint_{timestep}.pt"
+            if timesteps_completed % save_frequency == 0:
+                model_path = f"models/shape_fitting_model_{timesteps_completed}.pth"
                 trainer.save_model(model_path)
-                
-                # Save training metrics
+                print(f"  Model saved to {model_path}")
+            
+            # Save training metrics
+            if timesteps_completed % (save_frequency // 2) == 0:
                 metrics_df = pd.DataFrame(training_metrics)
-                metrics_df.to_csv(f"training_metrics_{timestep}.csv", index=False)
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                metrics_path = f"metrics/training_metrics_{timestamp}.csv"
+                os.makedirs('metrics', exist_ok=True)
+                metrics_df.to_csv(metrics_path, index=False)
+                print(f"  Training metrics saved to {metrics_path}")
     
     except KeyboardInterrupt:
-        print("\n⚠️  Training interrupted by user")
+        print("\n⚠️ Training interrupted by user")
     
-    finally:
-        # Final evaluation and save
-        end_time = time.time()
-        training_duration = end_time - start_time
-        
-        print(f"\n" + "=" * 60)
-        print("🏁 TRAINING COMPLETED")
-        print("=" * 60)
-        print(f"⏱️  Training Duration: {training_duration/3600:.2f} hours")
-        print(f"📈 Final Curriculum Level: {curriculum.current_level}")
-        print(f"🎯 Total Episodes: {len(trainer.episode_rewards)}")
-        
-        # Final evaluation
-        print(f"\n🔍 FINAL EVALUATION:")
-        trainer.evaluate(n_episodes=20)
-        
-        # Test all scenarios
-        print(f"\n🎯 FINAL SCENARIO EVALUATION:")
-        final_results = {}
-        for scenario in scenarios:
-            results = run_scenario_evaluation(trainer, scenario)
-            final_results[scenario['name']] = results
-        
-        # Save final model and results
-        trainer.save_model("continuous_ppo_final.pt")
-        trainer.plot_training_curves()
-        
-        # Save final metrics
-        final_metrics_df = pd.DataFrame(training_metrics)
-        final_metrics_df.to_csv("final_training_metrics.csv", index=False)
-        
-        print(f"\n✅ All files saved!")
-        print(f"   • Model: continuous_ppo_final.pt")
-        print(f"   • Training curves: ppo_training_curves.png")
-        print(f"   • Metrics: final_training_metrics.csv")
-        
-        # Show summary statistics
-        if trainer.episode_rewards:
-            final_rewards = trainer.episode_rewards[-50:] if len(trainer.episode_rewards) >= 50 else trainer.episode_rewards
-            final_utilization = trainer.utilization_scores[-50:] if len(trainer.utilization_scores) >= 50 else trainer.utilization_scores
-            final_success = trainer.success_rates[-50:] if len(trainer.success_rates) >= 50 else trainer.success_rates
-            
-            print(f"\n📊 FINAL PERFORMANCE SUMMARY:")
-            print(f"   • Average Reward (last 50): {np.mean(final_rewards):.2f}")
-            print(f"   • Average Utilization (last 50): {np.mean(final_utilization):.2%}")
-            print(f"   • Success Rate (last 50): {np.mean(final_success):.2%}")
-            print(f"   • Best Episode Reward: {max(trainer.episode_rewards):.2f}")
-            print(f"   • Best Utilization: {max(trainer.utilization_scores):.2%}")
+    # Final evaluation and save
+    elapsed_time = time.time() - start_time
+    print(f"\n🎉 Training completed!")
+    print(f"   Total time: {elapsed_time/3600:.2f} hours")
+    print(f"   Timesteps completed: {timesteps_completed:,}")
+    print(f"   Final difficulty level: {progress_manager.current_difficulty}")
+    
+    # Final comprehensive evaluation
+    print("\n🏆 Final comprehensive evaluation...")
+    scenarios = create_evaluation_scenarios()
+    final_results = {}
+    
+    for scenario in scenarios:
+        scenario_df = run_scenario_evaluation(trainer, scenario)
+        final_results[scenario['name']] = scenario_df
+    
+    # Save final model and results
+    final_model_path = f"models/shape_fitting_final_{timesteps_completed}.pth"
+    trainer.save_model(final_model_path)
+    print(f"\nFinal model saved to {final_model_path}")
+    
+    # Save final training metrics
+    final_metrics_df = pd.DataFrame(training_metrics)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    final_metrics_path = f"metrics/final_training_metrics_{timestamp}.csv"
+    final_metrics_df.to_csv(final_metrics_path, index=False)
+    print(f"Final metrics saved to {final_metrics_path}")
+    
+    # Plot training curves
+    print("\n📈 Generating training plots...")
+    trainer.plot_training_curves()
+    
+    print("\n✅ Training pipeline completed successfully!")
 
 if __name__ == "__main__":
     main() 

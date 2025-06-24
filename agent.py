@@ -1,5 +1,3 @@
-
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,42 +9,43 @@ import random
 from collections import deque
 import matplotlib.pyplot as plt
 
-class ContinuousActorCritic(nn.Module):
+class ShapeFittingActorCritic(nn.Module):
     """
-    Actor-Critic network for continuous action space container packing.
+    Actor-Critic network for shape fitting with discrete rotation.
     
-    Actions: [shape_id (discrete), x (continuous), y (continuous), rotation (continuous)]
+    Actions: [shape_id (discrete), x (continuous), y (continuous), rotation_idx (discrete)]
     """
     
-    def __init__(self, obs_size: int, max_shapes: int = 20, hidden_size: int = 512):
+    def __init__(self, obs_size: int, num_shapes: int = 10, num_rotations: int = 18, hidden_size: int = 512):
         super().__init__()
         
         self.obs_size = obs_size
-        self.max_shapes = max_shapes
+        self.num_shapes = num_shapes
+        self.num_rotations = num_rotations
         
         # Shared feature extractor
         self.shared_net = nn.Sequential(
             nn.Linear(obs_size, hidden_size),
             nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU()
         )
         
         # Actor heads
-        # Discrete action: shape selection
-        self.shape_selector = nn.Linear(hidden_size, max_shapes)
+        # Discrete actions: shape selection and rotation
+        self.shape_selector = nn.Linear(hidden_size, num_shapes)
+        self.rotation_selector = nn.Linear(hidden_size, num_rotations)
         
-        # Continuous actions: position and rotation
+        # Continuous actions: position
         self.position_x_mean = nn.Linear(hidden_size, 1)
         self.position_x_std = nn.Linear(hidden_size, 1)
         
         self.position_y_mean = nn.Linear(hidden_size, 1)
         self.position_y_std = nn.Linear(hidden_size, 1)
-        
-        self.rotation_mean = nn.Linear(hidden_size, 1)
-        self.rotation_std = nn.Linear(hidden_size, 1)
         
         # Critic head
         self.value_head = nn.Linear(hidden_size, 1)
@@ -58,17 +57,17 @@ class ContinuousActorCritic(nn.Module):
         """Initialize network weights."""
         for layer in self.modules():
             if isinstance(layer, nn.Linear):
-                nn.init.orthogonal_(layer.weight)
+                nn.init.orthogonal_(layer.weight, gain=np.sqrt(2))
                 nn.init.constant_(layer.bias, 0)
     
-    def forward(self, obs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, obs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Forward pass through the network.
         
         Returns:
             shape_logits: Logits for shape selection
+            rotation_logits: Logits for rotation selection  
             position_params: (x_mean, x_std, y_mean, y_std)
-            rotation_params: (mean, std)
             value: State value
         """
         # Shared features
@@ -77,6 +76,9 @@ class ContinuousActorCritic(nn.Module):
         # Shape selection (discrete)
         shape_logits = self.shape_selector(features)
         
+        # Rotation selection (discrete)
+        rotation_logits = self.rotation_selector(features)
+        
         # Position (continuous)
         x_mean = torch.sigmoid(self.position_x_mean(features)) * 100.0  # Scale to container size
         x_std = F.softplus(self.position_x_std(features)) + 1e-5
@@ -84,24 +86,20 @@ class ContinuousActorCritic(nn.Module):
         y_mean = torch.sigmoid(self.position_y_mean(features)) * 100.0
         y_std = F.softplus(self.position_y_std(features)) + 1e-5
         
-        # Rotation (continuous, 0-360 degrees)
-        rotation_mean = torch.sigmoid(self.rotation_mean(features)) * 360.0
-        rotation_std = F.softplus(self.rotation_std(features)) + 1e-5
-        
         # Value
         value = self.value_head(features)
         
-        return shape_logits, (x_mean, x_std, y_mean, y_std), (rotation_mean, rotation_std), value
+        return shape_logits, rotation_logits, (x_mean, x_std, y_mean, y_std), value
     
     def get_action(self, obs: torch.Tensor, deterministic: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Sample an action from the policy.
         
         Returns:
-            action: [shape_id, x, y, rotation]
+            action: [shape_id, x, y, rotation_idx]
             log_prob: Log probability of the action
         """
-        shape_logits, pos_params, rot_params, _ = self.forward(obs)
+        shape_logits, rotation_logits, pos_params, _ = self.forward(obs)
         
         # Shape selection (discrete)
         shape_dist = Categorical(logits=shape_logits)
@@ -110,6 +108,14 @@ class ContinuousActorCritic(nn.Module):
         else:
             shape_action = shape_dist.sample()
         shape_log_prob = shape_dist.log_prob(shape_action)
+        
+        # Rotation selection (discrete)
+        rotation_dist = Categorical(logits=rotation_logits)
+        if deterministic:
+            rotation_action = torch.argmax(rotation_logits, dim=-1)
+        else:
+            rotation_action = rotation_dist.sample()
+        rotation_log_prob = rotation_dist.log_prob(rotation_action)
         
         # Position (continuous)
         x_mean, x_std, y_mean, y_std = pos_params
@@ -130,18 +136,6 @@ class ContinuousActorCritic(nn.Module):
         x_log_prob = x_dist.log_prob(x_action)
         y_log_prob = y_dist.log_prob(y_action)
         
-        # Rotation (continuous)
-        rot_mean, rot_std = rot_params
-        rot_dist = Normal(rot_mean, rot_std)
-        
-        if deterministic:
-            rot_action = rot_mean
-        else:
-            rot_action = rot_dist.sample()
-        
-        rot_action = torch.clamp(rot_action, 0, 360)
-        rot_log_prob = rot_dist.log_prob(rot_action)
-        
         # Ensure all tensors have consistent shape for stacking
         shape_action_tensor = shape_action.float()
         if shape_action_tensor.dim() == 0:
@@ -155,12 +149,12 @@ class ContinuousActorCritic(nn.Module):
         if y_tensor.dim() == 0:
             y_tensor = y_tensor.unsqueeze(0)
             
-        rot_tensor = rot_action.squeeze()
-        if rot_tensor.dim() == 0:
-            rot_tensor = rot_tensor.unsqueeze(0)
+        rotation_tensor = rotation_action.float()
+        if rotation_tensor.dim() == 0:
+            rotation_tensor = rotation_tensor.unsqueeze(0)
         
         # Combine actions
-        action = torch.stack([shape_action_tensor, x_tensor, y_tensor, rot_tensor], dim=-1)
+        action = torch.stack([shape_action_tensor, x_tensor, y_tensor, rotation_tensor], dim=-1)
         
         # Ensure log probs have consistent shape
         shape_log_prob_tensor = shape_log_prob
@@ -175,11 +169,11 @@ class ContinuousActorCritic(nn.Module):
         if y_log_prob_tensor.dim() == 0:
             y_log_prob_tensor = y_log_prob_tensor.unsqueeze(0)
             
-        rot_log_prob_tensor = rot_log_prob.squeeze()
-        if rot_log_prob_tensor.dim() == 0:
-            rot_log_prob_tensor = rot_log_prob_tensor.unsqueeze(0)
+        rotation_log_prob_tensor = rotation_log_prob
+        if rotation_log_prob_tensor.dim() == 0:
+            rotation_log_prob_tensor = rotation_log_prob_tensor.unsqueeze(0)
         
-        total_log_prob = shape_log_prob_tensor + x_log_prob_tensor + y_log_prob_tensor + rot_log_prob_tensor
+        total_log_prob = shape_log_prob_tensor + x_log_prob_tensor + y_log_prob_tensor + rotation_log_prob_tensor
         
         return action, total_log_prob
     
@@ -192,127 +186,138 @@ class ContinuousActorCritic(nn.Module):
             entropy: Entropy of the policy
             value: State value
         """
-        shape_logits, pos_params, rot_params, value = self.forward(obs)
+        shape_logits, rotation_logits, pos_params, value = self.forward(obs)
         
         # Parse actions
         shape_action = action[:, 0].long()
         x_action = action[:, 1]
         y_action = action[:, 2]
-        rot_action = action[:, 3]
+        rotation_action = action[:, 3].long()
         
         # Shape selection
         shape_dist = Categorical(logits=shape_logits)
         shape_log_prob = shape_dist.log_prob(shape_action)
         shape_entropy = shape_dist.entropy()
         
+        # Rotation selection
+        rotation_dist = Categorical(logits=rotation_logits)
+        rotation_log_prob = rotation_dist.log_prob(rotation_action)
+        rotation_entropy = rotation_dist.entropy()
+        
         # Position
         x_mean, x_std, y_mean, y_std = pos_params
-        x_dist = Normal(x_mean.squeeze(), x_std.squeeze())
-        y_dist = Normal(y_mean.squeeze(), y_std.squeeze())
+        x_dist = Normal(x_mean, x_std)
+        y_dist = Normal(y_mean, y_std)
         
         x_log_prob = x_dist.log_prob(x_action)
         y_log_prob = y_dist.log_prob(y_action)
+        
         x_entropy = x_dist.entropy()
         y_entropy = y_dist.entropy()
         
-        # Rotation
-        rot_mean, rot_std = rot_params
-        rot_dist = Normal(rot_mean.squeeze(), rot_std.squeeze())
-        
-        rot_log_prob = rot_dist.log_prob(rot_action)
-        rot_entropy = rot_dist.entropy()
-        
-        # Combine
-        total_log_prob = shape_log_prob + x_log_prob + y_log_prob + rot_log_prob
-        total_entropy = shape_entropy + x_entropy + y_entropy + rot_entropy
+        # Combine log probabilities and entropies
+        total_log_prob = shape_log_prob + rotation_log_prob + x_log_prob + y_log_prob
+        total_entropy = shape_entropy + rotation_entropy + x_entropy + y_entropy
         
         return total_log_prob, total_entropy, value.squeeze()
 
 class PPOTrainer:
-    """PPO trainer for continuous container packing."""
+    """PPO trainer for shape fitting environment."""
     
-    def __init__(self, env, obs_size: int, max_shapes: int = 20, lr: float = 3e-4, 
-                 clip_ratio: float = 0.2, value_coef: float = 0.5, entropy_coef: float = 0.01):
+    def __init__(self, env, obs_size: int, num_shapes: int = 10, num_rotations: int = 18,
+                 lr: float = 3e-4, clip_ratio: float = 0.2, value_coef: float = 0.5, 
+                 entropy_coef: float = 0.01, gamma: float = 0.99, gae_lambda: float = 0.95):
         
         self.env = env
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Create network
-        self.network = ContinuousActorCritic(obs_size, max_shapes).to(self.device)
-        self.optimizer = optim.Adam(self.network.parameters(), lr=lr)
-        
-        # PPO parameters
+        # Hyperparameters
+        self.lr = lr
         self.clip_ratio = clip_ratio
         self.value_coef = value_coef
         self.entropy_coef = entropy_coef
+        self.gamma = gamma
+        self.gae_lambda = gae_lambda
         
-        # Training parameters
-        self.batch_size = 64
-        self.n_epochs = 10
-        self.gamma = 0.99
-        self.gae_lambda = 0.95
+        # Networks
+        self.network = ShapeFittingActorCritic(obs_size, num_shapes, num_rotations).to(self.device)
+        self.optimizer = optim.Adam(self.network.parameters(), lr=lr, eps=1e-5)
         
-        # Metrics tracking
-        self.episode_rewards = []
-        self.episode_lengths = []
-        self.utilization_scores = []
-        self.success_rates = []
+        # Training metrics
+        self.episode_rewards = deque(maxlen=100)
+        self.episode_shapes_fitted = deque(maxlen=100)
+        self.episode_success_rates = deque(maxlen=100)
+        self.training_losses = []
         
+        print(f"PPO Trainer initialized on {self.device}")
+        print(f"Network parameters: {sum(p.numel() for p in self.network.parameters()):,}")
+    
     def collect_trajectories(self, n_steps: int = 2048) -> Dict[str, torch.Tensor]:
-        """Collect trajectories for training."""
+        """Collect trajectories from the environment."""
+        
         observations = []
         actions = []
+        log_probs = []
         rewards = []
         dones = []
-        log_probs = []
         values = []
         
         obs = self.env.reset()
+        episode_reward = 0
+        episode_shapes_fitted = 0
         
         for step in range(n_steps):
             obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(self.device)
             
-            # Get action and value
+            # Get action from policy
             with torch.no_grad():
                 action, log_prob = self.network.get_action(obs_tensor)
                 _, _, _, value = self.network.forward(obs_tensor)
             
-            # Take action in environment
-            action_np = action.cpu().numpy().squeeze()
-            next_obs, reward, done, info = self.env.step(action_np)
-            
             # Store trajectory data
             observations.append(obs)
             actions.append(action.cpu().numpy().squeeze())
+            log_probs.append(log_prob.cpu().numpy().squeeze())
+            values.append(value.cpu().item())
+            
+            # Take action in environment
+            action_np = action.detach().cpu().numpy().squeeze()
+            next_obs, reward, done, info = self.env.step(action_np)
+            
             rewards.append(reward)
             dones.append(done)
-            log_probs.append(log_prob.cpu().numpy())
-            values.append(value.cpu().numpy().squeeze())
+            
+            episode_reward += reward
+            if 'shapes_fitted' in info:
+                episode_shapes_fitted = info['shapes_fitted']
             
             obs = next_obs
             
             if done:
-                # Episode ended, collect metrics
-                metrics = self.env.get_metrics()
-                self.episode_rewards.append(metrics['episode_reward'])
-                self.episode_lengths.append(metrics['episode_length'])
-                self.utilization_scores.append(metrics['utilization'])
-                self.success_rates.append(1.0 if metrics['shapes_remaining'] == 0 else 0.0)
+                # Episode finished
+                self.episode_rewards.append(episode_reward)
+                self.episode_shapes_fitted.append(episode_shapes_fitted)
+                self.episode_success_rates.append(episode_shapes_fitted / self.env.num_shapes_to_fit)
                 
                 obs = self.env.reset()
+                episode_reward = 0
+                episode_shapes_fitted = 0
         
         # Convert to tensors
-        return {
+        batch = {
             'observations': torch.FloatTensor(np.array(observations)).to(self.device),
             'actions': torch.FloatTensor(np.array(actions)).to(self.device),
+            'log_probs': torch.FloatTensor(np.array(log_probs)).to(self.device),
             'rewards': torch.FloatTensor(rewards).to(self.device),
             'dones': torch.BoolTensor(dones).to(self.device),
-            'log_probs': torch.FloatTensor(log_probs).to(self.device),
             'values': torch.FloatTensor(values).to(self.device)
         }
+        
+        return batch
     
     def compute_gae(self, rewards: torch.Tensor, values: torch.Tensor, dones: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Compute Generalized Advantage Estimation."""
+        
         advantages = torch.zeros_like(rewards)
         gae = 0
         
@@ -323,142 +328,158 @@ class PPOTrainer:
                 next_value = values[t + 1]
             
             if dones[t]:
-                next_value = 0
+                delta = rewards[t] - values[t]
+                gae = delta
+            else:
+                delta = rewards[t] + self.gamma * next_value - values[t]
+                gae = delta + self.gamma * self.gae_lambda * gae
             
-            delta = rewards[t] + self.gamma * next_value - values[t]
-            gae = delta + self.gamma * self.gae_lambda * gae * (1 - dones[t])
             advantages[t] = gae
         
         returns = advantages + values
+        
         return advantages, returns
     
-    def update_policy(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
+    def update_policy(self, batch: Dict[str, torch.Tensor], n_epochs: int = 10, batch_size: int = 256) -> Dict[str, float]:
         """Update the policy using PPO."""
-        observations = batch['observations']
-        actions = batch['actions']
-        old_log_probs = batch['log_probs']
-        rewards = batch['rewards']
-        dones = batch['dones']
-        old_values = batch['values']
         
         # Compute advantages and returns
-        advantages, returns = self.compute_gae(rewards, old_values, dones)
+        advantages, returns = self.compute_gae(batch['rewards'], batch['values'], batch['dones'])
         
         # Normalize advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
-        # Training loop
-        total_loss = 0
-        policy_loss_total = 0
-        value_loss_total = 0
-        entropy_loss_total = 0
+        # Prepare data
+        n_samples = len(batch['observations'])
+        indices = np.arange(n_samples)
         
-        for epoch in range(self.n_epochs):
-            # Shuffle data
-            indices = torch.randperm(len(observations))
+        total_policy_loss = 0
+        total_value_loss = 0
+        total_entropy_loss = 0
+        n_updates = 0
+        
+        for epoch in range(n_epochs):
+            np.random.shuffle(indices)
             
-            for start in range(0, len(observations), self.batch_size):
-                end = start + self.batch_size
+            for start in range(0, n_samples, batch_size):
+                end = start + batch_size
                 batch_indices = indices[start:end]
                 
-                batch_obs = observations[batch_indices]
-                batch_actions = actions[batch_indices]
-                batch_old_log_probs = old_log_probs[batch_indices]
-                batch_advantages = advantages[batch_indices]
-                batch_returns = returns[batch_indices]
+                # Get batch data
+                obs_batch = batch['observations'][batch_indices]
+                actions_batch = batch['actions'][batch_indices]
+                old_log_probs_batch = batch['log_probs'][batch_indices]
+                advantages_batch = advantages[batch_indices]
+                returns_batch = returns[batch_indices]
                 
                 # Evaluate current policy
-                log_probs, entropy, values = self.network.evaluate_action(batch_obs, batch_actions)
+                log_probs, entropy, values = self.network.evaluate_action(obs_batch, actions_batch)
                 
-                # Compute ratios
-                ratios = torch.exp(log_probs - batch_old_log_probs)
-                
-                # Compute policy loss
-                surr1 = ratios * batch_advantages
-                surr2 = torch.clamp(ratios, 1 - self.clip_ratio, 1 + self.clip_ratio) * batch_advantages
+                # Policy loss (PPO clip)
+                ratio = torch.exp(log_probs - old_log_probs_batch)
+                surr1 = ratio * advantages_batch
+                surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * advantages_batch
                 policy_loss = -torch.min(surr1, surr2).mean()
                 
-                # Compute value loss
-                value_loss = F.mse_loss(values, batch_returns)
+                # Value loss
+                value_loss = F.mse_loss(values, returns_batch)
                 
-                # Compute entropy loss
+                # Entropy loss
                 entropy_loss = -entropy.mean()
                 
                 # Total loss
-                loss = policy_loss + self.value_coef * value_loss + self.entropy_coef * entropy_loss
+                total_loss = policy_loss + self.value_coef * value_loss + self.entropy_coef * entropy_loss
                 
                 # Update
                 self.optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.network.parameters(), 0.5)
+                total_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.5)
                 self.optimizer.step()
                 
-                total_loss += loss.item()
-                policy_loss_total += policy_loss.item()
-                value_loss_total += value_loss.item()
-                entropy_loss_total += entropy_loss.item()
+                # Track losses
+                total_policy_loss += policy_loss.item()
+                total_value_loss += value_loss.item()
+                total_entropy_loss += entropy_loss.item()
+                n_updates += 1
+        
+        # Store training metrics
+        avg_policy_loss = total_policy_loss / n_updates
+        avg_value_loss = total_value_loss / n_updates
+        avg_entropy_loss = total_entropy_loss / n_updates
+        
+        self.training_losses.append({
+            'policy_loss': avg_policy_loss,
+            'value_loss': avg_value_loss,
+            'entropy_loss': avg_entropy_loss,
+            'total_loss': avg_policy_loss + self.value_coef * avg_value_loss + self.entropy_coef * avg_entropy_loss
+        })
         
         return {
-            'total_loss': total_loss / (self.n_epochs * len(observations) // self.batch_size),
-            'policy_loss': policy_loss_total / (self.n_epochs * len(observations) // self.batch_size),
-            'value_loss': value_loss_total / (self.n_epochs * len(observations) // self.batch_size),
-            'entropy_loss': entropy_loss_total / (self.n_epochs * len(observations) // self.batch_size)
+            'policy_loss': avg_policy_loss,
+            'value_loss': avg_value_loss,
+            'entropy_loss': avg_entropy_loss,
+            'avg_reward': np.mean(self.episode_rewards) if self.episode_rewards else 0,
+            'avg_shapes_fitted': np.mean(self.episode_shapes_fitted) if self.episode_shapes_fitted else 0,
+            'avg_success_rate': np.mean(self.episode_success_rates) if self.episode_success_rates else 0
         }
     
     def train(self, total_steps: int = 1000000, eval_freq: int = 10000, save_freq: int = 50000):
-        """Train the PPO agent."""
-        print(f"Training PPO agent on {self.device}")
-        print(f"Total steps: {total_steps}")
+        """Train the agent."""
         
-        step = 0
-        while step < total_steps:
+        print(f"Starting training for {total_steps:,} steps")
+        print(f"Evaluation frequency: {eval_freq:,} steps")
+        print(f"Save frequency: {save_freq:,} steps")
+        
+        steps_completed = 0
+        
+        while steps_completed < total_steps:
             # Collect trajectories
-            print(f"\nStep {step}: Collecting trajectories...")
-            batch = self.collect_trajectories()
+            print(f"\nCollecting trajectories... (Step {steps_completed:,}/{total_steps:,})")
+            batch = self.collect_trajectories(n_steps=2048)
             
             # Update policy
             print("Updating policy...")
-            losses = self.update_policy(batch)
+            metrics = self.update_policy(batch)
             
-            step += len(batch['rewards'])
+            steps_completed += 2048
             
             # Print progress
-            if len(self.episode_rewards) > 0:
-                recent_rewards = self.episode_rewards[-10:] if len(self.episode_rewards) >= 10 else self.episode_rewards
-                recent_utilization = self.utilization_scores[-10:] if len(self.utilization_scores) >= 10 else self.utilization_scores
-                recent_success = self.success_rates[-10:] if len(self.success_rates) >= 10 else self.success_rates
-                
-                print(f"Step {step}:")
-                print(f"  Avg Reward (last 10): {np.mean(recent_rewards):.2f}")
-                print(f"  Avg Utilization (last 10): {np.mean(recent_utilization):.2%}")
-                print(f"  Success Rate (last 10): {np.mean(recent_success):.2%}")
-                print(f"  Policy Loss: {losses['policy_loss']:.4f}")
-                print(f"  Value Loss: {losses['value_loss']:.4f}")
-                print(f"  Entropy Loss: {losses['entropy_loss']:.4f}")
+            print(f"Step {steps_completed:,}/{total_steps:,}")
+            print(f"  Avg Reward: {metrics['avg_reward']:.2f}")
+            print(f"  Avg Shapes Fitted: {metrics['avg_shapes_fitted']:.1f}/{self.env.num_shapes_to_fit}")
+            print(f"  Avg Success Rate: {metrics['avg_success_rate']:.2%}")
+            print(f"  Policy Loss: {metrics['policy_loss']:.4f}")
+            print(f"  Value Loss: {metrics['value_loss']:.4f}")
             
             # Evaluation
-            if step % eval_freq == 0:
-                self.evaluate()
+            if steps_completed % eval_freq == 0:
+                print("\nRunning evaluation...")
+                eval_metrics = self.evaluate(n_episodes=5)
+                print(f"  Eval Avg Reward: {eval_metrics['avg_reward']:.2f}")
+                print(f"  Eval Avg Shapes Fitted: {eval_metrics['avg_shapes_fitted']:.1f}")
+                print(f"  Eval Success Rate: {eval_metrics['success_rate']:.2%}")
             
             # Save model
-            if step % save_freq == 0:
-                self.save_model(f"ppo_container_step_{step}.pt")
+            if steps_completed % save_freq == 0:
+                model_path = f"models/shape_fitting_model_{steps_completed}.pth"
+                self.save_model(model_path)
+                print(f"Model saved to {model_path}")
         
-        print("Training completed!")
-        self.save_model("ppo_container_final.pt")
-        self.plot_training_curves()
-    
+        print("\nTraining completed!")
+        
     def evaluate(self, n_episodes: int = 5):
         """Evaluate the current policy."""
-        print(f"\nEvaluating policy for {n_episodes} episodes...")
         
-        eval_rewards = []
-        eval_utilizations = []
-        eval_successes = []
+        self.network.eval()
+        
+        episode_rewards = []
+        episode_shapes_fitted = []
+        episode_success_rates = []
         
         for episode in range(n_episodes):
             obs = self.env.reset()
             done = False
+            episode_reward = 0
             
             while not done:
                 obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(self.device)
@@ -466,72 +487,99 @@ class PPOTrainer:
                 with torch.no_grad():
                     action, _ = self.network.get_action(obs_tensor, deterministic=True)
                 
-                action_np = action.cpu().numpy().squeeze()
+                action_np = action.detach().cpu().numpy().squeeze()
                 obs, reward, done, info = self.env.step(action_np)
+                episode_reward += reward
             
-            metrics = self.env.get_metrics()
-            eval_rewards.append(metrics['episode_reward'])
-            eval_utilizations.append(metrics['utilization'])
-            eval_successes.append(1.0 if metrics['shapes_remaining'] == 0 else 0.0)
+            episode_rewards.append(episode_reward)
+            shapes_fitted = info.get('shapes_fitted', 0)
+            episode_shapes_fitted.append(shapes_fitted)
+            episode_success_rates.append(shapes_fitted / self.env.num_shapes_to_fit)
         
-        print(f"Evaluation Results:")
-        print(f"  Avg Reward: {np.mean(eval_rewards):.2f}")
-        print(f"  Avg Utilization: {np.mean(eval_utilizations):.2%}")
-        print(f"  Success Rate: {np.mean(eval_successes):.2%}")
+        self.network.train()
+        
+        return {
+            'avg_reward': np.mean(episode_rewards),
+            'avg_shapes_fitted': np.mean(episode_shapes_fitted),
+            'success_rate': np.mean(episode_success_rates),
+            'episode_rewards': episode_rewards
+        }
     
     def save_model(self, filepath: str):
-        """Save the trained model."""
+        """Save the model."""
+        import os
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        
         torch.save({
             'network_state_dict': self.network.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'episode_rewards': self.episode_rewards,
-            'utilization_scores': self.utilization_scores,
-            'success_rates': self.success_rates
+            'training_losses': self.training_losses,
+            'episode_rewards': list(self.episode_rewards),
+            'episode_shapes_fitted': list(self.episode_shapes_fitted),
+            'episode_success_rates': list(self.episode_success_rates)
         }, filepath)
-        print(f"Model saved to {filepath}")
     
     def load_model(self, filepath: str):
-        """Load a trained model."""
+        """Load a saved model."""
         checkpoint = torch.load(filepath, map_location=self.device)
+        
         self.network.load_state_dict(checkpoint['network_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.episode_rewards = checkpoint.get('episode_rewards', [])
-        self.utilization_scores = checkpoint.get('utilization_scores', [])
-        self.success_rates = checkpoint.get('success_rates', [])
-        print(f"Model loaded from {filepath}")
+        
+        if 'training_losses' in checkpoint:
+            self.training_losses = checkpoint['training_losses']
+        if 'episode_rewards' in checkpoint:
+            self.episode_rewards = deque(checkpoint['episode_rewards'], maxlen=100)
+        if 'episode_shapes_fitted' in checkpoint:
+            self.episode_shapes_fitted = deque(checkpoint['episode_shapes_fitted'], maxlen=100)
+        if 'episode_success_rates' in checkpoint:
+            self.episode_success_rates = deque(checkpoint['episode_success_rates'], maxlen=100)
     
     def plot_training_curves(self):
-        """Plot training progress curves."""
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        """Plot training progress."""
+        if not self.training_losses:
+            print("No training data to plot")
+            return
         
-        # Episode rewards
-        axes[0, 0].plot(self.episode_rewards)
-        axes[0, 0].set_title('Episode Rewards')
-        axes[0, 0].set_xlabel('Episode')
-        axes[0, 0].set_ylabel('Reward')
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 8))
         
-        # Utilization scores
-        axes[0, 1].plot(self.utilization_scores)
-        axes[0, 1].set_title('Container Utilization')
-        axes[0, 1].set_xlabel('Episode')
-        axes[0, 1].set_ylabel('Utilization %')
+        # Loss curves
+        losses = self.training_losses
+        ax1.plot([l['policy_loss'] for l in losses], label='Policy Loss')
+        ax1.plot([l['value_loss'] for l in losses], label='Value Loss')
+        ax1.plot([l['entropy_loss'] for l in losses], label='Entropy Loss')
+        ax1.set_title('Training Losses')
+        ax1.set_xlabel('Update')
+        ax1.set_ylabel('Loss')
+        ax1.legend()
+        ax1.grid(True)
         
-        # Success rates (moving average)
-        if len(self.success_rates) > 10:
-            window_size = 50
-            success_ma = np.convolve(self.success_rates, np.ones(window_size)/window_size, mode='valid')
-            axes[1, 0].plot(success_ma)
-            axes[1, 0].set_title(f'Success Rate (MA {window_size})')
-            axes[1, 0].set_xlabel('Episode')
-            axes[1, 0].set_ylabel('Success Rate')
+        # Reward curve
+        if self.episode_rewards:
+            ax2.plot(list(self.episode_rewards))
+            ax2.set_title('Episode Rewards')
+            ax2.set_xlabel('Episode')
+            ax2.set_ylabel('Reward')
+            ax2.grid(True)
         
-        # Episode lengths
-        axes[1, 1].plot(self.episode_lengths)
-        axes[1, 1].set_title('Episode Lengths')
-        axes[1, 1].set_xlabel('Episode')
-        axes[1, 1].set_ylabel('Steps')
+        # Shapes fitted curve
+        if self.episode_shapes_fitted:
+            ax3.plot(list(self.episode_shapes_fitted))
+            ax3.set_title('Shapes Fitted per Episode')
+            ax3.set_xlabel('Episode')
+            ax3.set_ylabel('Shapes Fitted')
+            ax3.grid(True)
+        
+        # Success rate curve
+        if self.episode_success_rates:
+            ax4.plot(list(self.episode_success_rates))
+            ax4.set_title('Success Rate per Episode')
+            ax4.set_xlabel('Episode')
+            ax4.set_ylabel('Success Rate')
+            ax4.grid(True)
         
         plt.tight_layout()
-        plt.savefig('ppo_training_curves.png', dpi=300, bbox_inches='tight')
         plt.show()
-        print("Training curves saved to ppo_training_curves.png") 
+
+# Legacy compatibility
+ContinuousActorCritic = ShapeFittingActorCritic 

@@ -1,5 +1,3 @@
-
-
 import gym
 from gym import spaces
 import numpy as np
@@ -14,7 +12,7 @@ from matplotlib.collections import PatchCollection
 
 from shapes import (
     PackingShape, ShapeFactory, RectangleShape, CircleShape, 
-    TriangleShape, LShapeShape, IrregularShape, BASIC_CHALLENGE, TETRIS_CHALLENGE
+    TriangleShape, LShapeShape, IrregularShape
 )
 
 class Container:
@@ -124,62 +122,64 @@ class Container:
         inside_area = intersection.area
         return 1.0 - (inside_area / shape.area)
 
-class ContinuousContainerEnv(gym.Env):
+class ShapeFittingEnv(gym.Env):
     """
-    Continuous container packing environment.
+    Shape fitting environment where agent tries to fit a group of shapes in a container.
     
     Action Space:
-        - shape_id: Discrete(num_available_shapes) - which shape to place
+        - shape_id: Discrete(num_shapes_to_fit) - which shape from the group to place
         - x: Box(0, container_width) - x position
         - y: Box(0, container_height) - y position  
-        - rotation: Box(0, 360) - rotation angle in degrees
+        - rotation: Discrete(18) - rotation in 20-degree intervals (0, 20, 40, ..., 340)
     
     Observation Space:
         - Container state representation
-        - Available shapes information
-        - Current utilization metrics
+        - Shapes to fit information
+        - Current fitting progress
     """
     
     def __init__(self, 
                  container_width: float = 100.0,
                  container_height: float = 100.0,
-                 max_shapes: int = 20,
-                 curriculum_level: int = 1,
+                 num_shapes_to_fit: int = 10,
+                 difficulty_level: int = 1,
                  container_shape: str = "rectangle",
-                 reward_mode: str = "utilization"):
+                 max_steps: int = 50):
         
         super().__init__()
         
         # Environment parameters
         self.container_width = container_width
         self.container_height = container_height
-        self.max_shapes = max_shapes
-        self.curriculum_level = curriculum_level
-        self.reward_mode = reward_mode
+        self.num_shapes_to_fit = num_shapes_to_fit
+        self.difficulty_level = difficulty_level
+        self.max_steps = max_steps
+        
+        # Rotation angles in 20-degree intervals
+        self.rotation_angles = [i * 20 for i in range(18)]  # 0, 20, 40, ..., 340
         
         # Create container
         self.container = Container(container_width, container_height, container_shape)
         
         # Shape management
-        self.available_shapes: List[PackingShape] = []
-        self.current_shape_idx = 0
-        self.shapes_placed = 0
+        self.shapes_to_fit: List[PackingShape] = []
+        self.shapes_fitted_count = 0
+        self.current_step = 0
         
         # Action and observation spaces
         self._setup_spaces()
         
         # Episode tracking
         self.episode_reward = 0.0
-        self.episode_length = 0
-        self.best_utilization = 0.0
+        self.best_shapes_fitted = 0
         
-        # Difficulty settings
+        # Difficulty settings for shape generation
         self.difficulty_settings = {
-            1: {"min_shapes": 5, "max_shapes": 8, "shape_complexity": 1.0},
-            2: {"min_shapes": 8, "max_shapes": 12, "shape_complexity": 1.5},
-            3: {"min_shapes": 12, "max_shapes": 16, "shape_complexity": 2.0},
-            4: {"min_shapes": 16, "max_shapes": 20, "shape_complexity": 2.5},
-            5: {"min_shapes": 20, "max_shapes": 25, "shape_complexity": 3.0},
+            1: {"shape_types": ["rectangle", "circle"], "size_range": (8, 20), "complexity": 1.0},
+            2: {"shape_types": ["rectangle", "circle", "triangle"], "size_range": (6, 22), "complexity": 1.5},
+            3: {"shape_types": ["rectangle", "circle", "triangle", "l_shape"], "size_range": (5, 25), "complexity": 2.0},
+            4: {"shape_types": ["rectangle", "circle", "triangle", "l_shape", "irregular"], "size_range": (4, 28), "complexity": 2.5},
+            5: {"shape_types": ["rectangle", "circle", "triangle", "l_shape", "irregular"], "size_range": (3, 30), "complexity": 3.0},
         }
         
         self.reset()
@@ -187,25 +187,24 @@ class ContinuousContainerEnv(gym.Env):
     def _setup_spaces(self):
         """Setup action and observation spaces."""
         
-        # Action space: [shape_id, x, y, rotation]
+        # Action space: [shape_id, x, y, rotation_discrete]
         self.action_space = spaces.Box(
-            low=np.array([0, 0, 0, 0]),
-            high=np.array([20, self.container_width, self.container_height, 360]),
+            low=np.array([0, 0, 0, 0], dtype=np.float32),
+            high=np.array([self.num_shapes_to_fit-1, self.container_width, self.container_height, 17], dtype=np.float32),
             dtype=np.float32
         )
         
-        # Observation space: container state + shape info + metrics
+        # Observation space: container state + shapes to fit info + progress
         obs_size = (
-            4 +  # Container metrics (utilization, free_space, area, perimeter)
+            4 +  # Container metrics (utilization, fitted_count, remaining_count, step_ratio)
             100 +  # Container occupancy grid (10x10)
-            60 +  # Current shape info (position, rotation, bounds, area, etc.)
-            100  # Available shapes summary
+            self.num_shapes_to_fit * 8  # Shape info: (shape_type, width, height, area, fitted_flag, x, y, rotation)
         )
         
         self.observation_space = spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(obs_size,),
+            low=-np.inf, 
+            high=np.inf, 
+            shape=(obs_size,), 
             dtype=np.float32
         )
     
@@ -214,235 +213,246 @@ class ContinuousContainerEnv(gym.Env):
         # Clear container
         self.container.clear()
         
-        # Generate new shape set based on curriculum
-        self._generate_shape_set()
+        # Generate new group of shapes to fit
+        self._generate_shape_group()
         
-        # Reset episode tracking
-        self.current_shape_idx = 0
-        self.shapes_placed = 0
+        # Reset episode state
+        self.shapes_fitted_count = 0
+        self.current_step = 0
         self.episode_reward = 0.0
-        self.episode_length = 0
-        self.best_utilization = 0.0
         
         return self._get_observation()
     
-    def _generate_shape_set(self):
-        """Generate a challenging set of shapes for this episode."""
-        settings = self.difficulty_settings.get(self.curriculum_level, self.difficulty_settings[5])
+    def _generate_shape_group(self):
+        """Generate a group of shapes that the agent needs to fit."""
+        self.shapes_to_fit = []
+        settings = self.difficulty_settings[self.difficulty_level]
         
-        num_shapes = random.randint(settings["min_shapes"], settings["max_shapes"])
-        complexity = settings["shape_complexity"]
-        
-        self.available_shapes = []
-        
-        # Mix of different shape types based on complexity
-        for _ in range(num_shapes):
-            shape = ShapeFactory.create_random_shape(complexity)
-            self.available_shapes.append(shape)
-        
-        # Add some challenging combinations
-        if complexity >= 2.0:
-            # Add shapes that require rotation to fit efficiently
-            self.available_shapes.extend([
-                RectangleShape(35, 8),  # Long thin rectangle
-                RectangleShape(8, 35),  # Tall thin rectangle
-                LShapeShape(20, 6),     # L-shape requiring careful placement
-            ])
-        
-        # Shuffle for randomness
-        random.shuffle(self.available_shapes)
+        for i in range(self.num_shapes_to_fit):
+            shape_type = random.choice(settings["shape_types"])
+            size_min, size_max = settings["size_range"]
+            
+            if shape_type == "rectangle":
+                width = random.uniform(size_min, size_max)
+                height = random.uniform(size_min, size_max)
+                shape = RectangleShape(width, height)
+            elif shape_type == "circle":
+                radius = random.uniform(size_min/2, size_max/2)
+                shape = CircleShape(radius)
+            elif shape_type == "triangle":
+                base = random.uniform(size_min, size_max)
+                height = random.uniform(size_min, size_max)
+                shape = TriangleShape(base, height)
+            elif shape_type == "l_shape":
+                arm_length = random.uniform(size_min, size_max)
+                arm_width = random.uniform(size_min/2, size_max/2)
+                shape = LShapeShape(arm_length, arm_width)
+            elif shape_type == "irregular":
+                # Create simple irregular shape
+                num_vertices = random.randint(4, 6)
+                vertices = []
+                angle_step = 2 * math.pi / num_vertices
+                radius_range = (size_min/2, size_max/2)
+                for j in range(num_vertices):
+                    angle = j * angle_step + random.uniform(-0.3, 0.3)
+                    radius = random.uniform(*radius_range)
+                    x = radius * math.cos(angle)
+                    y = radius * math.sin(angle)
+                    vertices.append((x, y))
+                shape = IrregularShape(vertices)
+            
+            # Mark shape as not fitted yet
+            shape.is_fitted = False
+            self.shapes_to_fit.append(shape)
     
     def step(self, action):
         """Execute one step in the environment."""
-        self.episode_length += 1
+        self.current_step += 1
         
         # Parse action
-        shape_idx = int(action[0]) % len(self.available_shapes)
-        x, y = float(action[1]), float(action[2])
-        rotation = float(action[3]) % 360
+        shape_id = int(np.clip(action[0], 0, len(self.shapes_to_fit) - 1))
+        x = np.clip(action[1], 0, self.container_width)
+        y = np.clip(action[2], 0, self.container_height)
+        rotation_idx = int(np.clip(action[3], 0, len(self.rotation_angles) - 1))
+        rotation = self.rotation_angles[rotation_idx]
         
-        # Get current shape to place
-        if shape_idx < len(self.available_shapes):
-            shape = self.available_shapes[shape_idx]
-            
-            # Set position and rotation
-            shape.move_to((x, y))
-            shape.rotate_to(rotation)
-            
-            # Try to place the shape
-            reward, done, info = self._attempt_placement(shape, shape_idx)
-        else:
-            reward = -0.1  # Invalid shape selection
-            done = False
-            info = {"placement": "invalid_shape"}
+        # Try to fit the selected shape
+        reward, success, info = self._attempt_shape_fitting(shape_id, x, y, rotation)
         
+        # Update fitted count
+        if success:
+            self.shapes_fitted_count += 1
+            self.shapes_to_fit[shape_id].is_fitted = True
+        
+        # Check if episode is done
+        done = self._check_episode_end()
+        
+        # Update tracking
         self.episode_reward += reward
+        self.best_shapes_fitted = max(self.best_shapes_fitted, self.shapes_fitted_count)
         
-        # Check if episode should end
-        if not done:
-            done = self._check_episode_end()
+        info.update({
+            'shapes_fitted': self.shapes_fitted_count,
+            'shapes_remaining': self.num_shapes_to_fit - self.shapes_fitted_count,
+            'total_reward': self.episode_reward,
+            'step': self.current_step,
+            'success_rate': self.shapes_fitted_count / self.num_shapes_to_fit
+        })
         
         return self._get_observation(), reward, done, info
     
-    def _attempt_placement(self, shape: PackingShape, shape_idx: int) -> Tuple[float, bool, Dict]:
-        """Attempt to place a shape and calculate reward."""
+    def _attempt_shape_fitting(self, shape_id: int, x: float, y: float, rotation: float) -> Tuple[float, bool, Dict]:
+        """Attempt to fit a shape at the specified position and rotation."""
         
-        if self.container.can_place_shape(shape):
+        # Check if shape is already fitted
+        if shape_id >= len(self.shapes_to_fit) or self.shapes_to_fit[shape_id].is_fitted:
+            return -5.0, False, {'placement': 'already_fitted', 'collision': False}
+        
+        # Create a copy of the shape at the specified position and rotation
+        shape = self.shapes_to_fit[shape_id]
+        test_shape = self._create_positioned_shape(shape, x, y, rotation)
+        
+        # Try to place the shape
+        if self.container.can_place_shape(test_shape):
             # Successful placement
-            self.container.place_shape(shape)
-            self.available_shapes.pop(shape_idx)
-            self.shapes_placed += 1
+            self.container.place_shape(test_shape)
             
-            # Calculate reward based on multiple factors
-            reward = self._calculate_placement_reward(shape)
+            # Reward is primarily based on successfully fitting shapes
+            base_reward = 100.0  # High reward for each successful fit
             
-            # Update best utilization
-            current_util = self.container.utilization
-            if current_util > self.best_utilization:
-                self.best_utilization = current_util
+            # Small bonus for efficient placement (compact fitting)
+            efficiency_bonus = self._calculate_efficiency_bonus(test_shape)
             
-            info = {
-                "placement": "success",
-                "area_placed": shape.area,
-                "utilization": current_util,
-                "shapes_remaining": len(self.available_shapes)
+            total_reward = base_reward + efficiency_bonus
+            
+            return total_reward, True, {
+                'placement': 'success', 
+                'collision': False,
+                'efficiency_bonus': efficiency_bonus
             }
-            
-            # Check if all shapes placed
-            done = len(self.available_shapes) == 0
-            if done:
-                reward += self._calculate_completion_bonus()
-            
         else:
-            # Failed placement
-            reward = self._calculate_collision_penalty(shape)
-            done = False
-            info = {
-                "placement": "collision",
-                "bounds_penalty": self.container.get_shape_bounds_penalty(shape)
+            # Failed placement (collision or out of bounds)
+            collision_penalty = -10.0
+            
+            # Additional penalty if shape is completely outside container
+            bounds_penalty = self.container.get_shape_bounds_penalty(test_shape) * -5.0
+            
+            total_penalty = collision_penalty + bounds_penalty
+            
+            return total_penalty, False, {
+                'placement': 'collision', 
+                'collision': True,
+                'bounds_penalty': bounds_penalty
             }
-        
-        return reward, done, info
     
-    def _calculate_placement_reward(self, shape: PackingShape) -> float:
-        """Calculate reward for successful shape placement."""
-        base_reward = shape.area * 0.1  # Base reward proportional to area
+    def _create_positioned_shape(self, original_shape: PackingShape, x: float, y: float, rotation: float) -> PackingShape:
+        """Create a new shape instance at the specified position and rotation."""
+        if isinstance(original_shape, RectangleShape):
+            new_shape = RectangleShape(original_shape.width, original_shape.height, 
+                                     position=(x, y), rotation=rotation)
+        elif isinstance(original_shape, CircleShape):
+            new_shape = CircleShape(original_shape.radius, 
+                                  position=(x, y), rotation=rotation)
+        elif isinstance(original_shape, TriangleShape):
+            new_shape = TriangleShape(original_shape.base_width, original_shape.height,
+                                    position=(x, y), rotation=rotation)
+        elif isinstance(original_shape, LShapeShape):
+            new_shape = LShapeShape(original_shape.arm_length, original_shape.arm_width,
+                                  position=(x, y), rotation=rotation)
+        elif isinstance(original_shape, IrregularShape):
+            new_shape = IrregularShape(original_shape.vertices,
+                                     position=(x, y), rotation=rotation)
+        else:
+            # Fallback - copy the original shape and update position/rotation
+            new_shape = original_shape
+            new_shape.move_to((x, y))
+            new_shape.rotate_to(rotation)
         
-        # Efficiency bonus - reward for good space utilization
-        utilization = self.container.utilization
-        efficiency_bonus = utilization * 10.0
-        
-        # Difficulty bonus - harder shapes worth more
-        difficulty_bonus = shape.shape_def.difficulty * shape.area * 0.05
-        
-        # Compactness bonus - reward for filling gaps
-        compactness_bonus = self._calculate_compactness_bonus(shape)
-        
-        total_reward = base_reward + efficiency_bonus + difficulty_bonus + compactness_bonus
-        
-        return max(0.1, total_reward)  # Minimum positive reward
+        return new_shape
     
-    def _calculate_collision_penalty(self, shape: PackingShape) -> float:
-        """Calculate penalty for collision or invalid placement."""
-        
-        # Base penalty
-        penalty = -1.0
-        
-        # Extra penalty for going out of bounds
-        bounds_penalty = self.container.get_shape_bounds_penalty(shape)
-        penalty -= bounds_penalty * 2.0
-        
-        # Opportunity cost - larger shapes get larger penalties
-        penalty -= shape.area * 0.01
-        
-        return penalty
-    
-    def _calculate_compactness_bonus(self, shape: PackingShape) -> float:
-        """Reward for placing shapes in compact arrangements."""
+    def _calculate_efficiency_bonus(self, shape: PackingShape) -> float:
+        """Calculate bonus for efficient space usage."""
+        # Small bonus for shapes placed near other shapes (compactness)
         if len(self.container.placed_shapes) <= 1:
             return 0.0
         
-        # Calculate how well this shape fits with existing shapes
-        # (simplified - could be more sophisticated)
-        adjacency_score = 0.0
-        for existing_shape in self.container.placed_shapes[:-1]:  # Exclude the just-placed shape
-            distance = self._shape_distance(shape, existing_shape)
-            if distance < 5.0:  # Close proximity
-                adjacency_score += max(0, 5.0 - distance)
+        min_distance = float('inf')
+        for placed_shape in self.container.placed_shapes[:-1]:  # Exclude the just-placed shape
+            distance = self._shape_distance(shape, placed_shape)
+            min_distance = min(min_distance, distance)
         
-        return adjacency_score * 0.1
+        # Bonus inversely proportional to distance (closer = better)
+        if min_distance < float('inf'):
+            compactness_bonus = max(0, 10.0 - min_distance * 0.5)
+            return compactness_bonus
+        
+        return 0.0
     
     def _shape_distance(self, shape1: PackingShape, shape2: PackingShape) -> float:
         """Calculate distance between two shapes."""
-        return math.sqrt((shape1.position[0] - shape2.position[0])**2 + 
-                        (shape1.position[1] - shape2.position[1])**2)
-    
-    def _calculate_completion_bonus(self) -> float:
-        """Bonus reward for completing the episode (placing all shapes)."""
-        base_bonus = 50.0
-        utilization_bonus = self.container.utilization * 100.0
-        efficiency_bonus = (self.best_utilization > 0.8) * 25.0
-        
-        return base_bonus + utilization_bonus + efficiency_bonus
+        return shape1.geometry.distance(shape2.geometry)
     
     def _check_episode_end(self) -> bool:
-        """Check if episode should end."""
-        # End if no shapes left
-        if len(self.available_shapes) == 0:
+        """Check if the episode should end."""
+        # Episode ends if all shapes are fitted
+        if self.shapes_fitted_count >= self.num_shapes_to_fit:
             return True
         
-        # End if too many steps
-        if self.episode_length >= self.max_shapes * 3:
+        # Episode ends if max steps reached
+        if self.current_step >= self.max_steps:
             return True
         
-        # End if no progress possible (all remaining shapes too big)
+        # Episode ends if no more shapes can possibly fit
         if self._no_shapes_can_fit():
             return True
         
         return False
     
     def _no_shapes_can_fit(self) -> bool:
-        """Check if any remaining shapes can possibly fit."""
-        free_space = self.container.get_free_space_ratio() * self.container.area
+        """Check if any remaining shapes can still fit in the container."""
+        unfitted_shapes = [shape for shape in self.shapes_to_fit if not shape.is_fitted]
         
-        # Simple heuristic: check if smallest remaining shape can fit
-        if not self.available_shapes:
+        if not unfitted_shapes:
             return True
         
-        min_area = min(shape.area for shape in self.available_shapes)
-        return free_space < min_area * 0.5  # Buffer for positioning
+        # Quick check: try a few random positions for each unfitted shape
+        for shape in unfitted_shapes:
+            for _ in range(5):  # Try 5 random positions
+                x = random.uniform(0, self.container_width)
+                y = random.uniform(0, self.container_height)
+                rotation = random.choice(self.rotation_angles)
+                
+                test_shape = self._create_positioned_shape(shape, x, y, rotation)
+                if self.container.can_place_shape(test_shape):
+                    return False  # At least one shape can still fit
+        
+        return True  # No shapes can fit
     
     def _get_observation(self) -> np.ndarray:
-        """Get current observation state."""
+        """Get the current observation."""
         obs = []
         
-        # Container metrics (4 values)
+        # Container metrics
         obs.extend([
             self.container.utilization,
-            self.container.get_free_space_ratio(),
-            self.container.area / 10000.0,  # Normalized
-            len(self.container.placed_shapes) / self.max_shapes
+            self.shapes_fitted_count / self.num_shapes_to_fit,  # Fitting progress
+            (self.num_shapes_to_fit - self.shapes_fitted_count) / self.num_shapes_to_fit,  # Remaining ratio
+            self.current_step / self.max_steps  # Step progress
         ])
         
-        # Container occupancy grid (10x10 = 100 values)
+        # Container occupancy grid
         occupancy_grid = self._get_occupancy_grid()
         obs.extend(occupancy_grid.flatten())
         
-        # Current shape info (60 values)
-        if self.available_shapes:
-            current_shape = self.available_shapes[0]
-            obs.extend(self._encode_shape_info(current_shape))
-        else:
-            obs.extend([0.0] * 60)
-        
-        # Available shapes summary (100 values)
-        shapes_summary = self._encode_shapes_summary()
-        obs.extend(shapes_summary)
+        # Shapes to fit information
+        for shape in self.shapes_to_fit:
+            shape_info = self._encode_shape_info(shape)
+            obs.extend(shape_info)
         
         return np.array(obs, dtype=np.float32)
     
     def _get_occupancy_grid(self, grid_size: int = 10) -> np.ndarray:
-        """Create occupancy grid representation."""
+        """Get a grid representation of container occupancy."""
         grid = np.zeros((grid_size, grid_size))
         
         cell_width = self.container_width / grid_size
@@ -450,179 +460,140 @@ class ContinuousContainerEnv(gym.Env):
         
         for i in range(grid_size):
             for j in range(grid_size):
-                x = i * cell_width + cell_width / 2
-                y = j * cell_height + cell_height / 2
+                # Check if this grid cell is occupied
+                x1 = i * cell_width
+                y1 = j * cell_height
+                x2 = x1 + cell_width
+                y2 = y1 + cell_height
                 
-                # Check if any shape occupies this cell
-                point = Point(x, y)
+                cell_box = box(x1, y1, x2, y2)
+                
                 for shape in self.container.placed_shapes:
-                    if shape.geometry.contains(point):
+                    if shape.geometry.intersects(cell_box):
                         grid[i, j] = 1.0
                         break
         
         return grid
     
     def _encode_shape_info(self, shape: PackingShape) -> List[float]:
-        """Encode shape information into numerical features."""
-        info = []
-        
-        # Basic properties
-        info.extend([
-            shape.position[0] / self.container_width,    # Normalized x
-            shape.position[1] / self.container_height,   # Normalized y
-            shape.rotation / 360.0,                      # Normalized rotation
-            shape.area / self.container.area,            # Normalized area
-            shape.shape_def.difficulty / 3.0,            # Normalized difficulty
-        ])
-        
-        # Bounding box
-        bounds = shape.bounds
-        info.extend([
-            bounds[0] / self.container_width,   # min_x
-            bounds[1] / self.container_height,  # min_y
-            bounds[2] / self.container_width,   # max_x
-            bounds[3] / self.container_height,  # max_y
-        ])
-        
-        # Shape type encoding (one-hot-ish)
-        shape_type_features = [0.0] * 6
+        """Encode shape information for observation."""
+        # Shape type encoding (one-hot style)
+        shape_type = 0.0
         if isinstance(shape, RectangleShape):
-            shape_type_features[0] = 1.0
+            shape_type = 1.0
         elif isinstance(shape, CircleShape):
-            shape_type_features[1] = 1.0
+            shape_type = 2.0
         elif isinstance(shape, TriangleShape):
-            shape_type_features[2] = 1.0
+            shape_type = 3.0
         elif isinstance(shape, LShapeShape):
-            shape_type_features[3] = 1.0
+            shape_type = 4.0
         elif isinstance(shape, IrregularShape):
-            shape_type_features[4] = 1.0
+            shape_type = 5.0
+        
+        # Shape dimensions
+        bounds = shape.geometry.bounds
+        width = bounds[2] - bounds[0]
+        height = bounds[3] - bounds[1]
+        area = shape.area
+        
+        # Fitting status
+        fitted_flag = 1.0 if shape.is_fitted else 0.0
+        
+        # Current position and rotation (if fitted)
+        if shape.is_fitted:
+            x, y = shape.position
+            rotation = shape.rotation
         else:
-            shape_type_features[5] = 1.0
+            x, y = 0.0, 0.0
+            rotation = 0.0
         
-        info.extend(shape_type_features)
-        
-        # Pad to 60 total features
-        while len(info) < 60:
-            info.append(0.0)
-        
-        return info[:60]
-    
-    def _encode_shapes_summary(self) -> List[float]:
-        """Encode summary of all available shapes."""
-        summary = []
-        
-        if not self.available_shapes:
-            return [0.0] * 100
-        
-        # Basic statistics
-        areas = [s.area for s in self.available_shapes]
-        summary.extend([
-            len(self.available_shapes) / self.max_shapes,
-            min(areas) / self.container.area if areas else 0.0,
-            max(areas) / self.container.area if areas else 0.0,
-            sum(areas) / self.container.area if areas else 0.0,
-        ])
-        
-        # Shape type counts
-        type_counts = [0, 0, 0, 0, 0, 0]
-        for shape in self.available_shapes:
-            if isinstance(shape, RectangleShape):
-                type_counts[0] += 1
-            elif isinstance(shape, CircleShape):
-                type_counts[1] += 1
-            elif isinstance(shape, TriangleShape):
-                type_counts[2] += 1
-            elif isinstance(shape, LShapeShape):
-                type_counts[3] += 1
-            elif isinstance(shape, IrregularShape):
-                type_counts[4] += 1
-            else:
-                type_counts[5] += 1
-        
-        # Normalize counts
-        total_shapes = len(self.available_shapes)
-        summary.extend([count / total_shapes if total_shapes > 0 else 0.0 for count in type_counts])
-        
-        # Pad to 100 features
-        while len(summary) < 100:
-            summary.append(0.0)
-        
-        return summary[:100]
+        return [shape_type, width, height, area, fitted_flag, x, y, rotation]
     
     def render(self, mode='human'):
-        """Render the current state."""
+        """Render the environment."""
         if mode == 'human':
             self._render_matplotlib()
     
     def _render_matplotlib(self):
         """Render using matplotlib."""
-        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+        
+        # Left plot: Container with fitted shapes
+        ax1.set_xlim(0, self.container_width)
+        ax1.set_ylim(0, self.container_height)
+        ax1.set_aspect('equal')
+        ax1.set_title(f'Container - {self.shapes_fitted_count}/{self.num_shapes_to_fit} shapes fitted')
         
         # Draw container boundary
-        if self.container.shape == "rectangle":
-            container_patch = patches.Rectangle(
-                (0, 0), self.container_width, self.container_height,
-                linewidth=2, edgecolor='black', facecolor='lightgray', alpha=0.3
-            )
-            ax.add_patch(container_patch)
+        container_patch = patches.Rectangle((0, 0), self.container_width, self.container_height,
+                                          linewidth=2, edgecolor='black', facecolor='none')
+        ax1.add_patch(container_patch)
         
-        # Draw placed shapes
-        for i, shape in enumerate(self.container.placed_shapes):
-            color = shape.shape_def.color
-            self._add_shape_patch(ax, shape, color, alpha=0.7)
+        # Draw fitted shapes
+        for shape in self.container.placed_shapes:
+            self._add_shape_patch(ax1, shape, 'green', alpha=0.7)
         
-        # Draw current shape being placed (if any)
-        if self.available_shapes:
-            current_shape = self.available_shapes[0]
-            self._add_shape_patch(ax, current_shape, 'red', alpha=0.3, linestyle='--')
+        # Right plot: Shapes to fit (remaining)
+        ax2.set_xlim(-50, 150)
+        ax2.set_ylim(-50, 150)
+        ax2.set_aspect('equal')
+        ax2.set_title('Shapes to Fit')
         
-        # Set axis properties
-        ax.set_xlim(-5, self.container_width + 5)
-        ax.set_ylim(-5, self.container_height + 5)
-        ax.set_aspect('equal')
-        ax.grid(True, alpha=0.3)
+        # Draw unfitted shapes in a grid layout
+        unfitted_shapes = [shape for shape in self.shapes_to_fit if not shape.is_fitted]
+        cols = 3
+        for i, shape in enumerate(unfitted_shapes[:9]):  # Show up to 9 shapes
+            row = i // cols
+            col = i % cols
+            x_offset = col * 40
+            y_offset = row * 40
+            
+            # Create a copy for display
+            display_shape = self._create_positioned_shape(shape, x_offset + 20, y_offset + 20, 0)
+            self._add_shape_patch(ax2, display_shape, 'red', alpha=0.5)
         
-        # Add information text
-        info_text = f"Placed: {len(self.container.placed_shapes)}/{self.shapes_placed + len(self.available_shapes)}\n"
-        info_text += f"Utilization: {self.container.utilization:.2%}\n"
-        info_text += f"Episode Reward: {self.episode_reward:.1f}"
-        
-        ax.text(0.02, 0.98, info_text, transform=ax.transAxes, fontsize=10,
-                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-        
-        plt.title(f"Container Packing - Level {self.curriculum_level}")
         plt.tight_layout()
         plt.show()
     
-    def _add_shape_patch(self, ax, shape: PackingShape, color: str, alpha: float = 0.7, linestyle: str = '-'):
+    def _add_shape_patch(self, ax, shape: PackingShape, color: str, alpha: float = 0.7):
         """Add a shape patch to the matplotlib axes."""
-        geom = shape.geometry
-        
-        if hasattr(geom, 'exterior'):
-            # Polygon shape
-            coords = list(geom.exterior.coords)
-            patch = patches.Polygon(coords, facecolor=color, alpha=alpha, 
-                                  edgecolor='black', linestyle=linestyle)
+        if isinstance(shape, RectangleShape):
+            x, y = shape.position
+            patch = patches.Rectangle(
+                (x - shape.width/2, y - shape.height/2),
+                shape.width, shape.height,
+                angle=shape.rotation,
+                facecolor=color, alpha=alpha, edgecolor='black'
+            )
+            ax.add_patch(patch)
+        elif isinstance(shape, CircleShape):
+            x, y = shape.position
+            patch = patches.Circle(
+                (x, y), shape.radius,
+                facecolor=color, alpha=alpha, edgecolor='black'
+            )
             ax.add_patch(patch)
         else:
-            # Fallback for other geometries
-            bounds = geom.bounds
-            patch = patches.Rectangle((bounds[0], bounds[1]), 
-                                    bounds[2] - bounds[0], bounds[3] - bounds[1],
-                                    facecolor=color, alpha=alpha, 
-                                    edgecolor='black', linestyle=linestyle)
+            # For other shapes, use the geometry directly
+            coords = list(shape.geometry.exterior.coords)
+            patch = patches.Polygon(
+                coords, closed=True,
+                facecolor=color, alpha=alpha, edgecolor='black'
+            )
             ax.add_patch(patch)
     
     def get_metrics(self) -> Dict[str, Any]:
-        """Get current environment metrics for logging."""
+        """Get current environment metrics."""
         return {
-            "utilization": self.container.utilization,
-            "shapes_placed": len(self.container.placed_shapes),
-            "shapes_remaining": len(self.available_shapes),
-            "episode_reward": self.episode_reward,
-            "episode_length": self.episode_length,
-            "best_utilization": self.best_utilization,
-            "curriculum_level": self.curriculum_level,
-            "occupied_area": self.container.occupied_area,
-            "free_space_ratio": self.container.get_free_space_ratio(),
-        } 
+            'shapes_fitted': self.shapes_fitted_count,
+            'shapes_remaining': self.num_shapes_to_fit - self.shapes_fitted_count,
+            'utilization': self.container.utilization,
+            'episode_reward': self.episode_reward,
+            'success_rate': self.shapes_fitted_count / self.num_shapes_to_fit,
+            'step': self.current_step,
+            'max_steps': self.max_steps,
+            'difficulty_level': self.difficulty_level
+        }
+
+# Backward compatibility alias
+ContinuousContainerEnv = ShapeFittingEnv 
