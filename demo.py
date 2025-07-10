@@ -1,6 +1,6 @@
 import numpy as np
 from env import ShapeFittingEnv
-from shapes import ShapeFactory, RectangleShape, CircleShape, TriangleShape, LShapeShape
+from shapes import ShapeFactory, RectangleShape, CircleShape, TriangleShape, LShape
 
 def test_shapes():
     """Test shape creation and basic functionality."""
@@ -10,7 +10,7 @@ def test_shapes():
     rect = RectangleShape(20, 10, position=(50, 50), rotation=45)
     circle = CircleShape(15, position=(30, 30))
     triangle = TriangleShape(18, 12, position=(70, 70), rotation=60)
-    l_shape = LShapeShape(20, 6, position=(25, 75), rotation=90)
+    l_shape = LShape(20, 6, position=(25, 75), rotation=90)
     
     print(f"   Rectangle: area={rect.area:.1f}, position={rect.position}, fitted={rect.is_fitted}")
     print(f"   Circle: area={circle.area:.1f}, position={circle.position}, fitted={circle.is_fitted}")

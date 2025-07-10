@@ -14,7 +14,7 @@ import time
 
 from shapes import (
     PackingShape, ShapeFactory, RectangleShape, CircleShape, 
-    TriangleShape, LShapeShape, IrregularShape
+    TriangleShape, LShape, IrregularShape
 )
 
 class Container:
@@ -270,7 +270,7 @@ class ShapeFittingEnv(gym.Env):
             elif shape_type == "l_shape":
                 arm_length = random.uniform(size_min, size_max)
                 arm_width = random.uniform(size_min/2, size_max/2)
-                shape = LShapeShape(arm_length, arm_width)
+                shape = LShape(arm_length, arm_width)
             elif shape_type == "irregular":
                 # Create simple irregular shape
                 num_vertices = random.randint(4, 6)
@@ -383,9 +383,9 @@ class ShapeFittingEnv(gym.Env):
         elif isinstance(original_shape, TriangleShape):
             new_shape = TriangleShape(original_shape.base_width, original_shape.height,
                                     position=(x, y), rotation=rotation)
-        elif isinstance(original_shape, LShapeShape):
-            new_shape = LShapeShape(original_shape.arm_length, original_shape.arm_width,
-                                  position=(x, y), rotation=rotation)
+        elif isinstance(original_shape, LShape):
+            new_shape = LShape(original_shape.arm_length, original_shape.arm_width,
+                                position=(x, y), rotation=rotation)
         elif isinstance(original_shape, IrregularShape):
             new_shape = IrregularShape(original_shape.vertices,
                                      position=(x, y), rotation=rotation)
@@ -524,7 +524,7 @@ class ShapeFittingEnv(gym.Env):
             shape_type = 2.0
         elif isinstance(shape, TriangleShape):
             shape_type = 3.0
-        elif isinstance(shape, LShapeShape):
+        elif isinstance(shape, LShape):
             shape_type = 4.0
         elif isinstance(shape, IrregularShape):
             shape_type = 5.0
