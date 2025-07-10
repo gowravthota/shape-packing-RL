@@ -94,7 +94,7 @@ within containers using precise positioning and rotation.
 ### RL Approach
 - **Algorithm**: PPO (Proximal Policy Optimization)
 - **Action Space**: Continuous positioning + discrete shape selection
-- **Reward Shaping**: Utilization bonus + collision penalties + completion bonus
+- **Reward Shaping**: Placement reward with compactness bonus, collision and boundary penalties
 - **Curriculum Learning**: Progressive difficulty for stable learning
 - **Exploration**: Entropy regularization for diverse strategy exploration
 
@@ -116,12 +116,11 @@ Input (264 dims) → Shared Layers (512→512) → Split into:
 ```
 
 ### Reward Function Components
-- Base placement reward: +50 for successful placement
-- Utilization multiplier: exponential bonus for space efficiency
-- Collision penalty: -10 base + overlap area penalty
-- Boundary penalty: shapes extending outside container
+- Base placement reward: +100 for successful placement
+- Collision penalty: -10 for invalid placement attempts
+- Boundary penalty: scaled penalty for shapes extending outside container
 - Compactness bonus: reward for tightly packed arrangements
-- Completion bonus: +100 for placing all shapes
+- No completion bonus currently implemented
 
 ## 🎮 Usage Instructions
 
