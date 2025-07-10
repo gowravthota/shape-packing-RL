@@ -165,7 +165,7 @@ class TriangleShape(PackingShape):
         ]
         return Polygon(points)
 
-class LShapeShape(PackingShape):
+class LShape(PackingShape):
     """L-shaped piece (like Tetris)."""
     
     def __init__(self, arm_length: float, arm_width: float, **kwargs):
@@ -257,9 +257,9 @@ class ShapeFactory:
         
         # L-shapes with different orientations
         shapes.extend([
-            LShapeShape(15, 5),
-            LShapeShape(20, 6),
-            LShapeShape(12, 4),
+            LShape(15, 5),
+            LShape(20, 6),
+            LShape(12, 4),
         ])
         
         # Create some irregular Tetris-like pieces
@@ -310,7 +310,7 @@ class ShapeFactory:
         elif shape_type == "l_shape":
             arm_length = random.uniform(*size_range)
             arm_width = random.uniform(size_range[0]/2, size_range[1]/2)
-            return LShapeShape(arm_length, arm_width)
+            return LShape(arm_length, arm_width)
         
         elif shape_type == "irregular":
             # Create random irregular polygon
@@ -406,7 +406,7 @@ class ShapeFactory:
                         random.uniform(6, 22)
                     ))
                 else:
-                    shapes.append(LShapeShape(
+                    shapes.append(LShape(
                         random.uniform(10, 20),
                         random.uniform(3, 8)
                     ))
@@ -428,7 +428,7 @@ class ShapeFactory:
                         random.uniform(5, 25)
                     ))
                 elif shape_type == 3:
-                    shapes.append(LShapeShape(
+                    shapes.append(LShape(
                         random.uniform(8, 22),
                         random.uniform(3, 10)
                     ))
