@@ -247,6 +247,8 @@ class PPOTrainer:
         self.episode_rewards = deque(maxlen=100)
         self.episode_shapes_fitted = deque(maxlen=100)
         self.episode_success_rates = deque(maxlen=100)
+        self.utilization_scores = deque(maxlen=100)
+        self.episode_lengths = deque(maxlen=100)
         self.training_losses = []
         
         print(f"PPO Trainer initialized on {self.device}")
@@ -265,6 +267,7 @@ class PPOTrainer:
         obs = self.env.reset()
         episode_reward = 0
         episode_shapes_fitted = 0
+        episode_length = 0
         
         for step in range(n_steps):
             obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(self.device)
@@ -283,13 +286,15 @@ class PPOTrainer:
             # Take action in environment
             action_np = action.detach().cpu().numpy().squeeze()
             next_obs, reward, done, info = self.env.step(action_np)
-            
+
             rewards.append(reward)
             dones.append(done)
-            
+
             episode_reward += reward
             if 'shapes_fitted' in info:
                 episode_shapes_fitted = info['shapes_fitted']
+
+            episode_length += 1
             
             obs = next_obs
             
@@ -298,10 +303,13 @@ class PPOTrainer:
                 self.episode_rewards.append(episode_reward)
                 self.episode_shapes_fitted.append(episode_shapes_fitted)
                 self.episode_success_rates.append(episode_shapes_fitted / self.env.num_shapes_to_fit)
-                
+                self.utilization_scores.append(self.env.container.utilization)
+                self.episode_lengths.append(episode_length)
+
                 obs = self.env.reset()
                 episode_reward = 0
                 episode_shapes_fitted = 0
+                episode_length = 0
         
         # Convert to tensors
         batch = {
