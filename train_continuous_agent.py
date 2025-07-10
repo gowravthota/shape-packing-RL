@@ -104,8 +104,8 @@ def run_scenario_evaluation(trainer, scenario):
     env = ContinuousContainerEnv(
         container_width=scenario['container_size'][0],
         container_height=scenario['container_size'][1],
-        curriculum_level=scenario['curriculum_level'],
-        max_shapes=25
+        difficulty_level=scenario['curriculum_level'],
+        num_shapes_to_fit=25
     )
     
     results = []
@@ -128,7 +128,7 @@ def run_scenario_evaluation(trainer, scenario):
             'episode': episode,
             'reward': metrics['episode_reward'],
             'utilization': metrics['utilization'],
-            'shapes_placed': metrics['shapes_placed'],
+            'shapes_fitted': metrics['shapes_fitted'],
             'success': metrics['shapes_remaining'] == 0
         })
     
@@ -139,7 +139,7 @@ def run_scenario_evaluation(trainer, scenario):
     print(f"   • Average Reward: {df['reward'].mean():.2f}")
     print(f"   • Average Utilization: {df['utilization'].mean():.2%}")
     print(f"   • Success Rate: {df['success'].mean():.2%}")
-    print(f"   • Average Shapes Placed: {df['shapes_placed'].mean():.1f}")
+    print(f"   • Average Shapes Fitted: {df['shapes_fitted'].mean():.1f}")
     
     return df
 
@@ -161,8 +161,8 @@ def main():
     env = ContinuousContainerEnv(
         container_width=100,
         container_height=100,
-        curriculum_level=1,
-        max_shapes=20
+        difficulty_level=1,
+        num_shapes_to_fit=20
     )
     
     print(f"   Container: {env.container_width}x{env.container_height}")
@@ -174,7 +174,7 @@ def main():
     trainer = PPOTrainer(
         env=env,
         obs_size=env.observation_space.shape[0],
-        max_shapes=20,
+        num_shapes=20,
         lr=3e-4,
         clip_ratio=0.2,
         value_coef=0.5,
@@ -225,8 +225,8 @@ def main():
             print(f"\n⏰ Timestep {timestep:,} / {total_timesteps:,}")
             print(f"📚 Curriculum Level: {curriculum.current_level}")
             
-            # Update environment curriculum level
-            env.curriculum_level = curriculum.current_level
+            # Update environment difficulty level
+            env.difficulty_level = curriculum.current_level
             
             # Collect trajectories and train
             batch = trainer.collect_trajectories(n_steps=2048)
@@ -236,7 +236,7 @@ def main():
             
             # Update curriculum statistics
             recent_episodes = trainer.episode_rewards[-20:] if len(trainer.episode_rewards) >= 20 else trainer.episode_rewards
-            recent_success = trainer.success_rates[-20:] if len(trainer.success_rates) >= 20 else trainer.success_rates
+            recent_success = trainer.episode_success_rates[-20:] if len(trainer.episode_success_rates) >= 20 else trainer.episode_success_rates
             recent_utilization = trainer.utilization_scores[-20:] if len(trainer.utilization_scores) >= 20 else trainer.utilization_scores
             
             if recent_episodes:
@@ -327,7 +327,7 @@ def main():
         if trainer.episode_rewards:
             final_rewards = trainer.episode_rewards[-50:] if len(trainer.episode_rewards) >= 50 else trainer.episode_rewards
             final_utilization = trainer.utilization_scores[-50:] if len(trainer.utilization_scores) >= 50 else trainer.utilization_scores
-            final_success = trainer.success_rates[-50:] if len(trainer.success_rates) >= 50 else trainer.success_rates
+            final_success = trainer.episode_success_rates[-50:] if len(trainer.episode_success_rates) >= 50 else trainer.episode_success_rates
             
             print(f"\n📊 FINAL PERFORMANCE SUMMARY:")
             print(f"   • Average Reward (last 50): {np.mean(final_rewards):.2f}")
