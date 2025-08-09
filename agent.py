@@ -16,12 +16,15 @@ class ShapeFittingActorCritic(nn.Module):
     Actions: [shape_id (discrete), x (continuous), y (continuous), rotation_idx (discrete)]
     """
     
-    def __init__(self, obs_size: int, num_shapes: int = 10, num_rotations: int = 18, hidden_size: int = 512):
+    def __init__(self, obs_size: int, num_shapes: int = 10, num_rotations: int = 18, hidden_size: int = 512,
+                 max_x: float = 100.0, max_y: float = 100.0):
         super().__init__()
         
         self.obs_size = obs_size
         self.num_shapes = num_shapes
         self.num_rotations = num_rotations
+        self.max_x = float(max_x)
+        self.max_y = float(max_y)
         
         # Shared feature extractor
         self.shared_net = nn.Sequential(
@@ -80,10 +83,10 @@ class ShapeFittingActorCritic(nn.Module):
         rotation_logits = self.rotation_selector(features)
         
         # Position (continuous)
-        x_mean = torch.sigmoid(self.position_x_mean(features)) * 100.0  # Scale to container size
+        x_mean = torch.sigmoid(self.position_x_mean(features)) * self.max_x  # Scale to container size
         x_std = F.softplus(self.position_x_std(features)) + 1e-5
         
-        y_mean = torch.sigmoid(self.position_y_mean(features)) * 100.0
+        y_mean = torch.sigmoid(self.position_y_mean(features)) * self.max_y
         y_std = F.softplus(self.position_y_std(features)) + 1e-5
         
         # Value
@@ -130,8 +133,8 @@ class ShapeFittingActorCritic(nn.Module):
             y_action = y_dist.sample()
         
         # Clamp to bounds
-        x_action = torch.clamp(x_action, 0, 100)
-        y_action = torch.clamp(y_action, 0, 100)
+        x_action = torch.clamp(x_action, 0, self.max_x)
+        y_action = torch.clamp(y_action, 0, self.max_y)
         
         x_log_prob = x_dist.log_prob(x_action)
         y_log_prob = y_dist.log_prob(y_action)
@@ -240,7 +243,14 @@ class PPOTrainer:
         self.gae_lambda = gae_lambda
         
         # Networks
-        self.network = ShapeFittingActorCritic(obs_size, num_shapes, num_rotations).to(self.device)
+        self.network = ShapeFittingActorCritic(
+            obs_size,
+            num_shapes,
+            num_rotations,
+            hidden_size=512,
+            max_x=getattr(env, 'container_width', 100.0),
+            max_y=getattr(env, 'container_height', 100.0),
+        ).to(self.device)
         self.optimizer = optim.Adam(self.network.parameters(), lr=lr, eps=1e-5)
         
         # Training metrics

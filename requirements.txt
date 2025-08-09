@@ -5,3 +5,4 @@ matplotlib>=3.5.0
 shapely>=2.0.0
 pandas>=1.5.0
 seaborn>=0.11.0
+pygame>=2.1.0

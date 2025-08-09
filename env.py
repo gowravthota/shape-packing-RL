@@ -154,7 +154,8 @@ class ShapeFittingEnv(gym.Env):
                  difficulty_level: int = 1,
                  container_shape: str = "rectangle",
                  container_vertices: Optional[List[Tuple[float, float]]] = None,
-                 max_steps: int = 50):
+                  max_steps: int = 50,
+                  save_images: bool = False):
         
         super().__init__()
         
@@ -165,10 +166,14 @@ class ShapeFittingEnv(gym.Env):
         self.difficulty_level = difficulty_level
         self.max_steps = max_steps
         self.container_vertices = container_vertices
+        self.save_images = save_images
         
-        # Create a unique directory for this run's images
-        self.image_save_path = f"metrics/images/run_{int(time.time())}"
-        os.makedirs(self.image_save_path, exist_ok=True)
+        # Create image directory only if saving images is enabled
+        if self.save_images:
+            self.image_save_path = f"images/run_{int(time.time())}"
+            os.makedirs(self.image_save_path, exist_ok=True)
+        else:
+            self.image_save_path = None
         
         # Rotation angles in 20-degree intervals
         self.rotation_angles = [i * 20 for i in range(18)]  # 0, 20, 40, ..., 340
@@ -323,8 +328,9 @@ class ShapeFittingEnv(gym.Env):
             'success_rate': self.shapes_fitted_count / self.num_shapes_to_fit
         })
         
-        # Save a screenshot of the step
-        self._save_step_image()
+        # Save a screenshot of the step if enabled
+        if self.save_images:
+            self._save_step_image()
         
         return self._get_observation(), reward, done, info
     

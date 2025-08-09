@@ -1,5 +1,5 @@
 import unittest
-from shapes import RectangleShape, CircleShape, TriangleShape, LShapeShape, IrregularShape
+from shapes import RectangleShape, CircleShape, TriangleShape, LShape, IrregularShape
 from env import Container
 
 class TestShapeGeometry(unittest.TestCase):
@@ -8,7 +8,7 @@ class TestShapeGeometry(unittest.TestCase):
             RectangleShape(10, 5),
             CircleShape(7),
             TriangleShape(8, 5),
-            LShapeShape(10, 3),
+            LShape(10, 3),
             IrregularShape([(0, 0), (3, 0), (4, 2), (1, 3), (-1, 1)])
         ]
         for shape in shapes:
